@@ -20,6 +20,20 @@ find_package(onnxruntime CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 
+# QR Code library
+find_path(QRENCODE_INCLUDE_DIR NAMES qrencode.h)
+find_library(QRENCODE_LIBRARY_RELEASE NAMES qrencode)
+find_library(QRENCODE_LIBRARY_DEBUG NAMES qrencoded)
+
+# Manually set libraries based on build type
+if(QRENCODE_LIBRARY_DEBUG AND QRENCODE_LIBRARY_RELEASE)
+  set(QRENCODE_LIBRARIES optimized ${QRENCODE_LIBRARY_RELEASE} debug ${QRENCODE_LIBRARY_DEBUG})
+elseif(QRENCODE_LIBRARY_RELEASE)
+  set(QRENCODE_LIBRARIES ${QRENCODE_LIBRARY_RELEASE})
+elseif(QRENCODE_LIBRARY_DEBUG)
+  set(QRENCODE_LIBRARIES ${QRENCODE_LIBRARY_DEBUG})
+endif()
+
 # GLM Configuration
 add_compile_definitions(GLM_ENABLE_EXPERIMENTAL)
 
@@ -55,7 +69,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     glad::glad
     glfw
     opengl32
+    ${QRENCODE_LIBRARIES}
 )
+
+# Include qrencode headers
+target_include_directories(${PROJECT_NAME} PRIVATE ${QRENCODE_INCLUDE_DIR})
 
 # --- Unit Tests ---
 enable_testing()

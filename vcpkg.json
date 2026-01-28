@@ -16,6 +16,9 @@
     },
     "gtest",
     "glad",
-    "onnxruntime"
+    "onnxruntime",
+    "cpp-httplib",
+    "libqrencode",
+    "nlohmann-json"
   ]
 }

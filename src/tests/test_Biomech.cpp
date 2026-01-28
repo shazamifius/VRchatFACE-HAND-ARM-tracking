@@ -3,7 +3,6 @@
 #include "../biomech/SkeletonSolver.hpp"
 #include <gtest/gtest.h>
 
-
 // --- CoordinateConverter Tests ---
 
 TEST(CoordinateConverterTest, BasicConversion) {
@@ -61,10 +60,17 @@ TEST(MotionFilterTest, Extrapolation) {
 
 TEST(SkeletonSolverTest, BasicSolve) {
   Biomech::SkeletonSolver solver;
-  std::vector<Core::Vector3> keypoints = {{0, 0, 0}};
-  std::vector<float> confidences = {0.9f};
 
-  auto pose = solver.Solve(keypoints, confidences);
+  // Construct dummy inputs
+  Vision::PoseResult body;
+  body.detection_confidence = 0.9f;
+  body.keypoints[Vision::PoseResult::NOSE] = {0, 0, 0.9f}; // Valid nose
+  body.keypoints[Vision::PoseResult::LEFT_SHOULDER] = {0, 0,
+                                                       0.9f}; // Valid Shoulder
+
+  Vision::HandResult leftHand, rightHand;
+
+  auto pose = solver.Solve(body, leftHand, rightHand);
 
   EXPECT_TRUE(pose.contains(Biomech::HumanBodyBones::Hips));
   EXPECT_FLOAT_EQ(pose[Biomech::HumanBodyBones::Hips].confidence, 0.9f);

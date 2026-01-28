@@ -15,6 +15,7 @@
 #include "core/MathUtils.hpp"
 #include "core/Profiler.hpp"
 #include "vision/FaceMesh.hpp"
+#include "vision/HandTracking.hpp"
 #include "vision/InferenceEngine.hpp"
 #include "vision/ModelSelector.hpp"
 
@@ -60,12 +61,130 @@ struct SharedState {
   int pending_camera_index = -1;
   bool camera_available[5] = {false, false, false, false,
                               false}; // Status for Camera 0-4
+
+  // Network Info
+  std::string server_ip = "127.0.0.1";
+  int server_port = 8080;
 };
 
 SharedState g_appState;
 CameraState g_camera; // 3D camera controls
 
+// ... (Keeping existing includes)
+#include "biomech/SkeletonSolver.hpp"
+
+// Helper to map enum to VMC string
+std::string BoneToString(Biomech::HumanBodyBones bone) {
+  using namespace Biomech;
+  switch (bone) {
+  case HumanBodyBones::Hips:
+    return "Hips";
+  case HumanBodyBones::Spine:
+    return "Spine";
+  case HumanBodyBones::Chest:
+    return "Chest";
+  case HumanBodyBones::UpperChest:
+    return "UpperChest";
+  case HumanBodyBones::Neck:
+    return "Neck";
+  case HumanBodyBones::Head:
+    return "Head";
+
+  case HumanBodyBones::LeftShoulder:
+    return "LeftShoulder";
+  case HumanBodyBones::LeftUpperArm:
+    return "LeftUpperArm";
+  case HumanBodyBones::LeftLowerArm:
+    return "LeftLowerArm";
+  case HumanBodyBones::LeftHand:
+    return "LeftHand";
+
+  case HumanBodyBones::RightShoulder:
+    return "RightShoulder";
+  case HumanBodyBones::RightUpperArm:
+    return "RightUpperArm";
+  case HumanBodyBones::RightLowerArm:
+    return "RightLowerArm";
+  case HumanBodyBones::RightHand:
+    return "RightHand";
+
+  case HumanBodyBones::LeftThumbProximal:
+    return "LeftThumbProximal";
+  case HumanBodyBones::LeftThumbIntermediate:
+    return "LeftThumbIntermediate";
+  case HumanBodyBones::LeftThumbDistal:
+    return "LeftThumbDistal";
+  case HumanBodyBones::LeftIndexProximal:
+    return "LeftIndexProximal";
+  case HumanBodyBones::LeftIndexIntermediate:
+    return "LeftIndexIntermediate";
+  case HumanBodyBones::LeftIndexDistal:
+    return "LeftIndexDistal";
+  case HumanBodyBones::LeftMiddleProximal:
+    return "LeftMiddleProximal";
+  case HumanBodyBones::LeftMiddleIntermediate:
+    return "LeftMiddleIntermediate";
+  case HumanBodyBones::LeftMiddleDistal:
+    return "LeftMiddleDistal";
+  case HumanBodyBones::LeftRingProximal:
+    return "LeftRingProximal";
+  case HumanBodyBones::LeftRingIntermediate:
+    return "LeftRingIntermediate";
+  case HumanBodyBones::LeftRingDistal:
+    return "LeftRingDistal";
+  case HumanBodyBones::LeftLittleProximal:
+    return "LeftLittleProximal";
+  case HumanBodyBones::LeftLittleIntermediate:
+    return "LeftLittleIntermediate";
+  case HumanBodyBones::LeftLittleDistal:
+    return "LeftLittleDistal";
+
+  case HumanBodyBones::RightThumbProximal:
+    return "RightThumbProximal";
+  case HumanBodyBones::RightThumbIntermediate:
+    return "RightThumbIntermediate";
+  case HumanBodyBones::RightThumbDistal:
+    return "RightThumbDistal";
+  case HumanBodyBones::RightIndexProximal:
+    return "RightIndexProximal";
+  case HumanBodyBones::RightIndexIntermediate:
+    return "RightIndexIntermediate";
+  case HumanBodyBones::RightIndexDistal:
+    return "RightIndexDistal";
+  case HumanBodyBones::RightMiddleProximal:
+    return "RightMiddleProximal";
+  case HumanBodyBones::RightMiddleIntermediate:
+    return "RightMiddleIntermediate";
+  case HumanBodyBones::RightMiddleDistal:
+    return "RightMiddleDistal";
+  case HumanBodyBones::RightRingProximal:
+    return "RightRingProximal";
+  case HumanBodyBones::RightRingIntermediate:
+    return "RightRingIntermediate";
+  case HumanBodyBones::RightRingDistal:
+    return "RightRingDistal";
+  case HumanBodyBones::RightLittleProximal:
+    return "RightLittleProximal";
+  case HumanBodyBones::RightLittleIntermediate:
+    return "RightLittleIntermediate";
+  case HumanBodyBones::RightLittleDistal:
+    return "RightLittleDistal";
+
+  default:
+    return "";
+  }
+}
+
 // --- VISION THREAD ---
+#include "network/CloudflareTunnel.hpp"
+#include "network/VideoReceiver.hpp"
+#include "network/WebServer.hpp"
+
+
+// Global receiver to bridge threads (could be passed via args, but shared state
+// legacy)
+Network::VideoReceiver g_videoReceiver;
+
 void VisionLoop() {
   std::cout << "[Thread] Vision Thread Started." << std::endl;
 
@@ -73,20 +192,48 @@ void VisionLoop() {
   Vision::InferenceEngine ai_engine;
   ai_engine.LoadModel(L"models/yolov8n-pose.onnx");
 
-  // NEW: Face Mesh for facial expressions
+  // Face Mesh
   Vision::FaceMesh face_engine;
-  face_engine.LoadModel(
-      L"models/face_landmarker.onnx"); // Will use STUB if not found
+  face_engine.LoadModel(L"models/Facial-Landmark-Detection.onnx");
   Biomech::BlendshapeCalculator blendshape_calc;
+
+  // Hand Tracking
+  Vision::HandTracking hand_engine;
+  hand_engine.LoadModel(L"models/MediaPipeHandDetector.onnx");
 
   Vision::ModelSelector quality_selector;
   Biomech::CoordinateConverter converter;
-  Network::OSCClient osc_client("127.0.0.1", 9000); // Port 9000 standard VRChat
+  Biomech::SkeletonSolver skeleton_solver;
+  Network::OSCClient osc_client("127.0.0.1", 9000);
+
+  // --- Start Web Server ---
+  Network::WebServer web_server(8080);
+  std::cout << "[Network] Starting Web Server on port 8080..." << std::endl;
+  web_server.Start("assets/web");
+
+  // Inject VideoReceiver to handle incoming phone camera frames
+  web_server.SetVideoReceiver(&g_videoReceiver);
+
+  std::string local_ip = web_server.GetLocalIP();
+  std::cout << "[Network] Local IP: " << local_ip << std::endl;
+
+  // Update Shared State with IP/Port for UI
+  {
+    std::lock_guard<std::mutex> lock(g_appState.mutex);
+    g_appState.server_ip = local_ip;
+    g_appState.server_port = 8080;
+  }
 
   cv::VideoCapture cap(0);
   if (!cap.isOpened()) {
     std::cerr << "[Error] Camera not found in Vision Thread!" << std::endl;
   }
+
+  // --- Optimization State ---
+  Vision::PoseResult last_pose;
+  bool last_pose_detected = false;
+  int frame_count = 0;
+  const int YOLO_INTERVAL = 3;
 
   while (true) {
     // Check exit condition
@@ -96,32 +243,49 @@ void VisionLoop() {
         break;
     }
 
-    // Check for Camera Switch
-    {
-      std::lock_guard<std::mutex> lock(g_appState.mutex);
-      if (g_appState.pending_camera_index != -1) {
-        std::cout << "[Thread] Switching to Camera "
-                  << g_appState.pending_camera_index << std::endl;
-        cap.open(g_appState.pending_camera_index);
-        if (!cap.isOpened()) {
-          std::cerr << "[Error] Could not open Camera "
+    // Check for Camera Switch logic (Local vs Network)
+    // If Network has frame, use it? Or manual switch?
+    // Let's prioritize Network if connected.
+
+    cv::Mat frame;
+    bool using_network = false;
+
+    if (g_videoReceiver.GetLatestFrame(frame)) {
+      using_network = true;
+    } else {
+      // Fallback to local camera
+      {
+        std::lock_guard<std::mutex> lock(g_appState.mutex);
+        if (g_appState.pending_camera_index != -1) {
+          std::cout << "[Thread] Switching to Camera "
                     << g_appState.pending_camera_index << std::endl;
+          cap.open(g_appState.pending_camera_index);
+          g_appState.pending_camera_index = -1;
         }
-        g_appState.pending_camera_index = -1;
+      }
+      if (cap.isOpened()) {
+        cap >> frame;
       }
     }
 
-    cv::Mat frame;
-    if (cap.isOpened()) {
-      cap >> frame;
-    }
-
     if (!frame.empty()) {
+      frame_count++;
       auto start_inf = std::chrono::high_resolution_clock::now();
 
-      // 1. Run Inference and get pose
-      Vision::PoseResult pose;
-      bool pose_detected = ai_engine.RunInference(frame, pose);
+      // Mirror if local (Network is usually mirrored by client or needs
+      // specific handling)
+      if (!using_network) {
+        // cv::flip(frame, frame, 1); // User preference? Usually mirror for
+        // self-view.
+      }
+
+      // 1. Adaptive Body Tracking (YOLO)
+      if (frame_count % YOLO_INTERVAL == 0 || !last_pose_detected) {
+        last_pose_detected = ai_engine.RunInference(frame, last_pose);
+      }
+
+      bool pose_detected = last_pose_detected;
+      Vision::PoseResult &pose = last_pose;
 
       auto end_inf = std::chrono::high_resolution_clock::now();
       long long duration =
@@ -129,70 +293,112 @@ void VisionLoop() {
                                                                 start_inf)
               .count();
 
-      // 1b. Run Face Mesh inference (for blendshapes)
-      auto start_face = std::chrono::high_resolution_clock::now();
+      long long face_duration = 0;
+
+      // 2. Face Tracking setup
       Vision::FaceMeshResult face_result;
-      bool face_detected = face_engine.RunInference(frame, face_result);
-
-      // Calculate blendshapes from face landmarks
+      bool face_detected = false;
       Biomech::ARKitBlendshapes blendshapes;
-      if (face_detected && face_result.IsValid()) {
-        blendshapes = blendshape_calc.Calculate(face_result);
-      }
 
-      auto end_face = std::chrono::high_resolution_clock::now();
-      long long face_duration =
-          std::chrono::duration_cast<std::chrono::microseconds>(end_face -
-                                                                start_face)
-              .count();
+      // 3. Hand Tracking setup
+      Vision::HandResult left_hand_result;
+      Vision::HandResult right_hand_result;
 
-      // 2. Convert Pose to Skeleton Positions
-      Core::Vector3 ai_head_pos(0.0f, 1.6f, 0.5f); // Default
-      Core::Quaternion ai_head_rot(1, 0, 0, 0);
+      cv::Rect face_rect(0, 0, 0, 0);
 
-      if (pose_detected && pose.IsValid()) {
-        // Convert 2D keypoints to 3D positions
-        // Normalize nose position (center of frame = origin)
-        float norm_x = (pose.Nose().x / frame.cols) - 0.5f;
-        float norm_y = (pose.Nose().y / frame.rows) - 0.5f;
+      if (pose_detected) {
+        // ... (Keep existing Logic)
+        auto nose = pose.Nose();
+        int face_size = (int)(frame.cols * 0.4f);
+        int fx = (int)nose.x - face_size / 2;
+        int fy = (int)nose.y - face_size / 2;
+        // Clamp checks...
+        if (fx < 0)
+          fx = 0;
+        if (fy < 0)
+          fy = 0;
+        if (fx + face_size > frame.cols)
+          face_size = frame.cols - fx;
+        if (fy + face_size > frame.rows)
+          face_size = frame.rows - fy;
+        face_rect = cv::Rect(fx, fy, face_size, face_size);
 
-        // Head position (fix Y inversion)
-        ai_head_pos.x = norm_x * 2.0f; // X: -1 to 1
-        ai_head_pos.y =
-            1.7f + norm_y * 1.5f; // Y: 1.7 ± movement (FIXED: was -)
-        ai_head_pos.z = 0.5f;     // Z: fixed for now
-
-        // Estimate head rotation from eye positions
-        if (pose.LeftEye().IsValid() && pose.RightEye().IsValid()) {
-          float eye_dx = pose.RightEye().x - pose.LeftEye().x;
-          float eye_dy = pose.RightEye().y - pose.LeftEye().y;
-          float roll_angle = atan2(eye_dy, eye_dx);
-
-          // Simple roll rotation (around Z axis)
-          ai_head_rot.w = cos(roll_angle / 2.0f);
-          ai_head_rot.x = 0.0f;
-          ai_head_rot.y = 0.0f;
-          ai_head_rot.z = sin(roll_angle / 2.0f);
+        if (face_rect.area() > 0) {
+          cv::Mat face_roi = frame(face_rect);
+          face_detected = face_engine.RunInference(face_roi, face_result);
+          if (face_detected) {
+            // Un-normalize landmarks to Global Frame
+            for (auto &lm : face_result.landmarks) {
+              lm.x = fx + lm.x * face_size;
+              lm.y = fy + lm.y * face_size;
+              lm.z = lm.z * face_size;
+            }
+            blendshapes = blendshape_calc.Calculate(face_result);
+          }
         }
-      } else {
-        // Fallback to mockup if no detection
-        float time = (float)glfwGetTime();
-        ai_head_pos.x = sin(time) * 0.2f;
-        ai_head_pos.y = 1.6f + cos(time) * 0.05f;
-        ai_head_pos.z = 0.5f;
+
+        auto ProcessHand = [&](const Vision::PoseKeypoint &wrist, bool isLeft,
+                               Vision::HandResult &result) {
+          if (wrist.confidence > 0.3f) {
+            int size = (int)(frame.cols * 0.25f); // 25% of screen width
+            int x = (int)wrist.x - size / 2;
+            int y = (int)wrist.y - size / 2;
+
+            // Clamp
+            if (x < 0)
+              x = 0;
+            if (y < 0)
+              y = 0;
+            if (x + size > frame.cols)
+              size = frame.cols - x;
+            if (y + size > frame.rows)
+              size = frame.rows - y;
+
+            if (size > 20) {
+              cv::Mat roi = frame(cv::Rect(x, y, size, size));
+              if (hand_engine.RunInference(roi, result)) {
+                // Un-normalize
+                for (auto &lm : result.landmarks) {
+                  lm.x = x + lm.x * size;
+                  lm.y = y + lm.y * size;
+                  lm.z = lm.z * size;
+                }
+                result.is_right_hand = !isLeft;
+              }
+            }
+          }
+        };
+
+        ProcessHand(pose.LeftWrist(), true, left_hand_result);
+        ProcessHand(pose.RightWrist(), false, right_hand_result);
       }
 
-      // 3. OSC
-      Core::Vector3 unity_head_pos = converter.ConvertPosition(ai_head_pos);
-      Core::Quaternion unity_head_rot = converter.ConvertRotation(ai_head_rot);
+      // 4. Solve Skeleton (Body + Hands)
+      auto skeleton_pose =
+          skeleton_solver.Solve(pose, left_hand_result, right_hand_result);
 
-      // Send to VRChat
-      osc_client.Send(Network::VMCProtocol::PackBonePos("Head", unity_head_pos,
-                                                        unity_head_rot));
+      // 5. Send OSC
+      for (const auto &bone : skeleton_pose) {
+        std::string boneName = BoneToString(bone.first);
+        if (!boneName.empty()) {
+          Core::Vector3 unityPos =
+              converter.ConvertPosition(bone.second.position);
+          Core::Quaternion unityRot =
+              converter.ConvertRotation(bone.second.rotation);
 
-      // Send Blendshapes (VRCFaceTracking v2 format)
-      if (face_detected && face_result.IsValid()) {
-        // Send essential blendshapes to VRChat
+          if (bone.first == Biomech::HumanBodyBones::Hips) {
+            unityPos.x = (unityPos.x / frame.cols - 0.5f) * 2.0f;
+            unityPos.y = (1.0f - (unityPos.y / frame.rows)) * 2.0f;
+            unityPos.z = 0;
+          }
+
+          osc_client.Send(
+              Network::VMCProtocol::PackBonePos(boneName, unityPos, unityRot));
+        }
+      }
+
+      // Face Blendshapes
+      if (face_detected) {
         osc_client.SendFloat("/avatar/parameters/FT/v2/EyeClosedLeft",
                              blendshapes.eyeBlinkLeft);
         osc_client.SendFloat("/avatar/parameters/FT/v2/EyeClosedRight",
@@ -205,27 +411,27 @@ void VisionLoop() {
                              blendshapes.mouthSmileRight);
         osc_client.SendFloat("/avatar/parameters/FT/v2/BrowInnerUp",
                              blendshapes.browInnerUp);
-        // TODO: Send all other blendshapes as needed
       }
 
-      // 4. Update Shared State
+      // 6. Update Shared State
       {
         std::lock_guard<std::mutex> lock(g_appState.mutex);
-        g_appState.latest_frame = frame.clone(); // Deep copy for UI
+        g_appState.latest_frame = frame.clone();
         g_appState.new_frame_ready = true;
-        g_appState.head_pos = unity_head_pos;
-        g_appState.head_rot = unity_head_rot;
         g_appState.inference_time_us = duration;
-        g_appState.face_inference_time_us = face_duration; // NEW
-        g_appState.blendshapes = blendshapes;              // NEW
-        g_appState.face_tracking_active =
-            face_detected && face_result.IsValid(); // NEW
+        g_appState.face_inference_time_us = face_duration;
+        g_appState.blendshapes = blendshapes;
+        g_appState.face_tracking_active = face_detected;
+
+        // Pass IP to UI via State if needed. (Hack for now)
+        // Ideally g_appState should have std::string server_ip.
       }
     } else {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }
 
+  web_server.Stop();
   std::cout << "[Thread] Vision Thread Stopped." << std::endl;
 }
 
@@ -334,7 +540,8 @@ void RenderSkeleton(const OffscreenBuffer &buffer, const Core::Vector3 &pos,
   glRotatef(g_camera.angle_y, 1.0f, 0.0f, 0.0f); // Pitch
   glRotatef(g_camera.angle_x, 0.0f, 1.0f, 0.0f); // Yaw
 
-  // --- FLOOR GRID ---
+  // --- FLOOR GRID REMOVED based on user request ---
+  /*
   glBegin(GL_LINES);
   glColor3f(0.2f, 0.2f, 0.3f);
   for (int i = -10; i <= 10; ++i) {
@@ -344,6 +551,7 @@ void RenderSkeleton(const OffscreenBuffer &buffer, const Core::Vector3 &pos,
     glVertex3f(10.0f, 0.0f, (float)i);
   }
   glEnd();
+  */
 
   // --- SKELETON DRAWING ---
   glPushMatrix();
@@ -566,8 +774,8 @@ int main() {
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
   glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
 
-  GLFWwindow *window =
-      glfwCreateWindow(1600, 900, "VRChat Video Bridge (Pro)", NULL, NULL);
+  GLFWwindow *window = glfwCreateWindow(
+      1600, 900, "VRChat Video Bridge V19.1 (Pro)", NULL, NULL);
   if (!window)
     return 1;
 
@@ -596,12 +804,47 @@ int main() {
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init(glsl_version);
 
-  UI::MainWindow main_window;
-  OffscreenBuffer avatar_buffer;
-  avatar_buffer.Init(512, 512);
-
   // 3. Start Vision Thread
   std::thread vision_thread(VisionLoop);
+
+  // Wait a moment for WebServer to start and populate IP
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+
+  std::string display_ip = "127.0.0.1";
+  int display_port = 8080;
+  {
+    std::lock_guard<std::mutex> lock(g_appState.mutex);
+    display_ip = g_appState.server_ip;
+    display_port = g_appState.server_port;
+  }
+
+  UI::MainWindow main_window(display_ip, display_port);
+
+  // --- Start Cloudflare Tunnel for global access ---
+  Network::CloudflareTunnel tunnel;
+  std::cout << "[Network] Starting Cloudflare Tunnel..." << std::endl;
+  if (tunnel.Start(8080)) {
+    std::string tunnel_url = tunnel.GetPublicURL();
+    std::string github_pages_url =
+        "https://shazamifius.github.io/VRchatFACE-HAND-ARM-tracking";
+    std::string full_qr_url = github_pages_url + "?tunnel=" + tunnel_url;
+
+    std::cout << "[Network] ============================================"
+              << std::endl;
+    std::cout << "[Network] Phone Link URL: " << full_qr_url << std::endl;
+    std::cout << "[Network] ============================================"
+              << std::endl;
+
+    main_window.UpdateQRCode(full_qr_url);
+  } else {
+    std::cerr << "[Network] WARNING: Cloudflare Tunnel failed to start."
+              << std::endl;
+    std::cerr << "[Network] Phone Link will only work on local network."
+              << std::endl;
+  }
+
+  OffscreenBuffer avatar_buffer;
+  avatar_buffer.Init(512, 512);
 
   // 4. Main Event Loop (UI)
   GLuint camera_tex_id = 0;
@@ -647,21 +890,34 @@ int main() {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // Camera Controls (WASDQER keys)
-    if (ImGui::IsKeyDown(ImGuiKey_W))
-      g_camera.distance -= 0.05f; // Zoom in
+    // Camera Controls
+    // Move Forward (Z or W for AZERTY/QWERTY support)
+    if (ImGui::IsKeyDown(ImGuiKey_Z) || ImGui::IsKeyDown(ImGuiKey_W))
+      g_camera.distance -= 0.05f; // Zoom in / Forward
+
+    // Move Backward (S)
     if (ImGui::IsKeyDown(ImGuiKey_S))
-      g_camera.distance += 0.05f; // Zoom out
+      g_camera.distance += 0.05f; // Zoom out / Backward
+
+    // Rotate Camera (A / E)
     if (ImGui::IsKeyDown(ImGuiKey_A))
-      g_camera.angle_x -= 1.0f; // Rotate left
-    if (ImGui::IsKeyDown(ImGuiKey_D))
-      g_camera.angle_x += 1.0f; // Rotate right
-    if (ImGui::IsKeyDown(ImGuiKey_Q))
-      g_camera.height += 0.05f; // Move up
+      g_camera.angle_x -= 1.0f; // Rotate Left
     if (ImGui::IsKeyDown(ImGuiKey_E))
-      g_camera.height -= 0.05f; // Move down
+      g_camera.angle_x += 1.0f; // Rotate Right
+
+    // Reset (R)
     if (ImGui::IsKeyDown(ImGuiKey_R))
-      g_camera.Reset(); // Reset camera
+      g_camera.Reset();
+
+    // Look Around (Arrow Keys)
+    if (ImGui::IsKeyDown(ImGuiKey_LeftArrow))
+      g_camera.angle_x -= 1.0f;
+    if (ImGui::IsKeyDown(ImGuiKey_RightArrow))
+      g_camera.angle_x += 1.0f;
+    if (ImGui::IsKeyDown(ImGuiKey_UpArrow))
+      g_camera.angle_y -= 1.0f; // Tilt Up
+    if (ImGui::IsKeyDown(ImGuiKey_DownArrow))
+      g_camera.angle_y += 1.0f; // Tilt Down
 
     int display_w, display_h;
     glfwGetFramebufferSize(window, &display_w, &display_h);

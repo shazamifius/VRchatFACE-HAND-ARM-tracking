@@ -6,6 +6,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <qrencode.h>
 
 // Forward decl
 struct GLFWwindow;
@@ -32,8 +33,9 @@ struct BodyState {
 
 class MainWindow {
 public:
-  MainWindow() {
-    GenerateQRPlaceholder();
+  MainWindow(const std::string &ip, int port) {
+    std::string url = "http://" + ip + ":" + std::to_string(port);
+    GenerateQRPlaceholder(url);
     SetupStyle();
   }
 
@@ -203,7 +205,8 @@ public:
           // Keep aspect ratio
           float aspect = (float)width / (float)height * 0.5f; // Rough estimate
           // We just stretch to fit for now, 3D render is usually square-ish
-          ImGui::Image((ImTextureID)(intptr_t)avatar_preview_texture_id, avail);
+          ImGui::Image((ImTextureID)(intptr_t)avatar_preview_texture_id, avail,
+                       ImVec2(0, 1), ImVec2(1, 0));
         } else {
           ImGui::Text("Waiting for 3D Renderer...");
         }
@@ -226,28 +229,75 @@ public:
 
 private:
   GLuint qr_texture_id_ = 0;
+  std::string current_qr_url_;
 
-  void GenerateQRPlaceholder() {
-    // Generate a cool "Cyber" QR code pattern (placeholder)
-    const int w = 64;
-    const int h = 64;
-    std::vector<unsigned char> pixels(w * h * 4);
-    for (int i = 0; i < w * h; ++i) {
-      int r = (rand() % 255) > 200 ? 255 : 0; // High contrast noise
-      pixels[i * 4 + 0] = r ? 0 : 0;
-      pixels[i * 4 + 1] = r ? 255 : 0; // Cyan/Green type
-      pixels[i * 4 + 2] = r ? 255 : 0;
-      pixels[i * 4 + 3] = 255;
+public:
+  // Update QR code with new URL (for Cloudflare Tunnel)
+  void UpdateQRCode(const std::string &full_url) {
+    current_qr_url_ = full_url;
+    GenerateQRPlaceholder(full_url);
+  }
+
+private:
+  void GenerateQRPlaceholder(const std::string &url) {
+
+    // Generate QR with libqrencode
+    // Signature: QRcode_encodeString(string, version, level, hint,
+    // casesensitive)
+    QRcode *qr =
+        QRcode_encodeString(url.c_str(), 0, QR_ECLEVEL_M, QR_MODE_8, 1);
+    if (!qr) {
+      return; // Failed to generate QR
     }
-    // ... (We would reuse the GL generation code properly or helper)
-    // For brevity in this tool call, I'm assuming existing helper or simple
-    // recreation
+
+    int border = 4;
+    int qr_size = qr->width;
+    int size = qr_size + border * 2;
+    std::vector<unsigned char> pixels(size * size * 4);
+
+    // Colors
+    unsigned char fg[4] = {0, 255, 200, 255}; // Cyan/Green Neon
+    unsigned char bg[4] = {20, 20, 30, 255};  // Dark background
+
+    for (int y = 0; y < size; y++) {
+      for (int x = 0; x < size; x++) {
+        // Check if inside QR area
+        bool isDark = false;
+        int qx = x - border;
+        int qy = y - border;
+
+        if (qx >= 0 && qx < qr_size && qy >= 0 && qy < qr_size) {
+          // libqrencode stores data row-major: data[y * width + x]
+          isDark = (qr->data[qy * qr_size + qx] & 1);
+        }
+
+        int idx = (y * size + x) * 4;
+        if (isDark) {
+          pixels[idx + 0] = fg[0];
+          pixels[idx + 1] = fg[1];
+          pixels[idx + 2] = fg[2];
+          pixels[idx + 3] = fg[3];
+        } else {
+          pixels[idx + 0] = bg[0];
+          pixels[idx + 1] = bg[1];
+          pixels[idx + 2] = bg[2];
+          pixels[idx + 3] = bg[3];
+        }
+      }
+    }
+
+    // Free QR code
+    QRcode_free(qr);
+
+    if (qr_texture_id_ != 0)
+      glDeleteTextures(1, &qr_texture_id_);
+
     glGenTextures(1, &qr_texture_id_);
     glBindTexture(GL_TEXTURE_2D, qr_texture_id_);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                 pixels.data());
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, pixels.data());
   }
 
   void SetupStyle() {

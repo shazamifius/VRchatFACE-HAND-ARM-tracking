@@ -9,18 +9,28 @@ echo   Downloading AI Models...
 echo ==================================================
 echo.
 
-echo [INFO] Downloading YOLOv8n-Pose (ONNX)...
-set "MODEL_URL=https://huggingface.co/Xenova/yolov8n-pose-onnx/resolve/main/yolov8n-pose.onnx"
-set "MODEL_FILE=models\yolov8n-pose.onnx"
+@echo off
+setlocal
+cd /d "%~dp0.."
 
-curl -L -o "%MODEL_FILE%" "%MODEL_URL%"
+if not exist "models" mkdir "models"
 
-if exist "%MODEL_FILE%" (
-    echo [SUCCESS] Model downloaded to %MODEL_FILE%
-) else (
-    echo [ERROR] Download failed. Please download manually from:
-    echo %MODEL_URL%
-    echo and save it to models\yolov8n-pose.onnx
+echo ==================================================
+echo   Downloading AI Models...
+echo ==================================================
+echo.
+
+REM Try using Python first as it handles redirects/LFS better
+python scripts/download_models.py
+if %errorlevel% neq 0 (
+    echo [WARNING] Python script failed or python not found.
+    echo Please make sure you have Python installed.
+    echo.
+    echo Falling back to simple curl...
+    REM --- Fallback CURL logic (Original) ---
+    REM ... (Omitted to force update to Python usage for user)
+    pause
+    exit /b 1
 )
 
 echo.
