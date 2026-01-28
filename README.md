@@ -1,5 +1,4 @@
-# VRChat Universal Video Bridge (Leader 2026)
-
+# VRChat Universal Video Bridge
 High-performance, AI-powered video tracking bridge for VRChat. Use your Webcam or Phone for full facial, hand, and arm tracking without expensive hardware.
 
 ## Features
