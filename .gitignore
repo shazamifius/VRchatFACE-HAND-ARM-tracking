@@ -1,0 +1,7 @@
+build/
+out/
+vcpkg/
+.vs/
+*.user
+*.log
+.DS_Store
