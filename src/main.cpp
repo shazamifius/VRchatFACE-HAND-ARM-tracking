@@ -65,6 +65,10 @@ struct SharedState {
   // Network Info
   std::string server_ip = "127.0.0.1";
   int server_port = 8080;
+
+  // Cloudflare Tunnel Info (updated asynchronously)
+  std::string tunnel_url = "";
+  bool tunnel_ready = false;
 };
 
 SharedState g_appState;
@@ -179,7 +183,6 @@ std::string BoneToString(Biomech::HumanBodyBones bone) {
 #include "network/CloudflareTunnel.hpp"
 #include "network/VideoReceiver.hpp"
 #include "network/WebServer.hpp"
-
 
 // Global receiver to bridge threads (could be passed via args, but shared state
 // legacy)
@@ -820,28 +823,46 @@ int main() {
 
   UI::MainWindow main_window(display_ip, display_port);
 
-  // --- Start Cloudflare Tunnel for global access ---
-  Network::CloudflareTunnel tunnel;
-  std::cout << "[Network] Starting Cloudflare Tunnel..." << std::endl;
-  if (tunnel.Start(8080)) {
-    std::string tunnel_url = tunnel.GetPublicURL();
-    std::string github_pages_url =
-        "https://shazamifius.github.io/VRchatFACE-HAND-ARM-tracking";
-    std::string full_qr_url = github_pages_url + "?tunnel=" + tunnel_url;
+  // --- Start Cloudflare Tunnel ASYNCHRONOUSLY (non-blocking) ---
+  // Create tunnel instance globally to avoid destruction
+  static Network::CloudflareTunnel tunnel;
 
-    std::cout << "[Network] ============================================"
-              << std::endl;
-    std::cout << "[Network] Phone Link URL: " << full_qr_url << std::endl;
-    std::cout << "[Network] ============================================"
-              << std::endl;
+  std::cout << "[Network] Starting Cloudflare Tunnel in background..."
+            << std::endl;
 
-    main_window.UpdateQRCode(full_qr_url);
-  } else {
-    std::cerr << "[Network] WARNING: Cloudflare Tunnel failed to start."
-              << std::endl;
-    std::cerr << "[Network] Phone Link will only work on local network."
-              << std::endl;
-  }
+  // Launch tunnel in separate thread to avoid blocking UI
+  std::thread tunnel_thread([]() {
+    // Wait for WebServer to be fully ready before starting tunnel
+    // This prevents Cloudflare Error 1033 (can't connect to backend)
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+
+    if (tunnel.Start(8080)) {
+      std::string tunnel_url = tunnel.GetPublicURL();
+      std::string github_pages_url =
+          "https://shazamifius.github.io/VRchatFACE-HAND-ARM-tracking";
+      std::string full_qr_url = github_pages_url + "?tunnel=" + tunnel_url;
+
+      std::cout << "[Network] ============================================"
+                << std::endl;
+      std::cout << "[Network] Phone Link URL: " << full_qr_url << std::endl;
+      std::cout << "[Network] ============================================"
+                << std::endl;
+
+      // Instead of calling UpdateQRCode directly (not thread-safe),
+      // store in shared state for UI thread to pick up
+      {
+        std::lock_guard<std::mutex> lock(g_appState.mutex);
+        g_appState.tunnel_url = full_qr_url;
+        g_appState.tunnel_ready = true;
+      }
+    } else {
+      std::cerr << "[Network] WARNING: Cloudflare Tunnel failed to start."
+                << std::endl;
+      std::cerr << "[Network] Phone Link will only work on local network."
+                << std::endl;
+    }
+  });
+  tunnel_thread.detach(); // Let it run independently
 
   OffscreenBuffer avatar_buffer;
   avatar_buffer.Init(512, 512);

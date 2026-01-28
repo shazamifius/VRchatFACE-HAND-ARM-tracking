@@ -41,14 +41,25 @@ public:
     tunnel_thread_ = std::thread(
         [this, cloudflared_path]() { LaunchTunnel(cloudflared_path); });
 
-    // Wait for URL to be parsed (max 10 seconds)
-    for (int i = 0; i < 100; i++) {
+    // Wait for URL to be parsed (max 30 seconds - first start can be slow)
+    int max_wait_ms = 30000;
+    int wait_interval_ms = 500;
+    int iterations = max_wait_ms / wait_interval_ms;
+
+    for (int i = 0; i < iterations; i++) {
       if (!public_url_.empty()) {
         std::cout << "[Cloudflare] Tunnel URL: " << public_url_ << std::endl;
         running_ = true;
         return true;
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+      // Show progress every 5 seconds
+      if (i > 0 && (i * wait_interval_ms) % 5000 == 0) {
+        std::cout << "[Cloudflare] Still waiting for tunnel... ("
+                  << (i * wait_interval_ms / 1000) << "s)" << std::endl;
+      }
+
+      std::this_thread::sleep_for(std::chrono::milliseconds(wait_interval_ms));
     }
 
     std::cerr << "[Cloudflare] Timeout waiting for tunnel URL" << std::endl;
@@ -132,7 +143,7 @@ private:
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
     si.hStdOutput = stdout_write;
-    si.hStdError = stdout_write;
+    si.hStdError = stdout_write; // IMPORTANT: Redirect stderr to same pipe!
     si.dwFlags |= STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
     ZeroMemory(&pi, sizeof(pi));
@@ -150,25 +161,31 @@ private:
     CloseHandle(pi.hThread);
     CloseHandle(stdout_write);
 
-    // Read output to parse URL
+    // Read output to parse URL (cloudflared outputs to stderr!)
     char buffer[4096];
     DWORD bytes_read;
     std::string output;
+    bool url_found = false;
 
-    while (running_ && public_url_.empty()) {
+    while (!url_found) {
       if (ReadFile(stdout_read, buffer, sizeof(buffer) - 1, &bytes_read,
                    NULL) &&
           bytes_read > 0) {
         buffer[bytes_read] = '\0';
         output += buffer;
 
+        // Debug: print cloudflared output
+        std::cout << "[Cloudflare] " << buffer << std::flush;
+
         // Try to parse URL from output
         std::string url = ParseURLFromOutput(output);
         if (!url.empty()) {
           public_url_ = url;
+          url_found = true;
           break;
         }
       } else {
+        // No more data, exit
         break;
       }
     }

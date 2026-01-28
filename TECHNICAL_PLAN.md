@@ -1,4 +1,4 @@
-# Plan d'Implémentation Technique - VRChat Universal Video Bridge (Leader 2026)
+# Plan d'Implémentation Technique - VRChat Universal Video Bridge
 
 ## 🏗️ Architecture "Data-Oriented" (Multithread Lock-Free)
 
