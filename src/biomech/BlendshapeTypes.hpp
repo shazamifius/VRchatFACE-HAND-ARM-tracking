@@ -1,5 +1,6 @@
 #pragma once
 
+#include "biomech/UserCalibration.hpp"
 #include "vision/FaceTypes.hpp"
 #include <cmath>
 
@@ -77,6 +78,11 @@ struct ARKitBlendshapes {
   // === TONGUE === (1 parameter - optional)
   float tongueOut = 0.0f; // Tongue sticking out
 
+  // === HEAD POSE === (3 parameters)
+  float headPitch = 0.0f; // Up/Down (X-axis)
+  float headYaw = 0.0f;   // Left/Right (Y-axis)
+  float headRoll = 0.0f;  // Tilt (Z-axis)
+
   // Total: 52 blendshapes (full ARKit set)
 
   // Helper: Reset all to neutral
@@ -111,7 +117,25 @@ struct ARKitBlendshapes {
     noseSneerLeft = noseSneerRight = 0.0f;
 
     tongueOut = 0.0f;
+
+    headPitch = headYaw = headRoll = 0.0f;
   }
+
+  // Define JSON serialization for all 52 fields
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE(
+      ARKitBlendshapes, eyeBlinkLeft, eyeBlinkRight, eyeLookUpLeft,
+      eyeLookUpRight, eyeLookDownLeft, eyeLookDownRight, eyeLookInLeft,
+      eyeLookInRight, eyeLookOutLeft, eyeLookOutRight, eyeSquintLeft,
+      eyeSquintRight, eyeWideLeft, eyeWideRight, jawOpen, jawForward, jawLeft,
+      jawRight, mouthClose, mouthFunnel, mouthPucker, mouthLeft, mouthRight,
+      mouthSmileLeft, mouthSmileRight, mouthFrownLeft, mouthFrownRight,
+      mouthDimpleLeft, mouthDimpleRight, mouthStretchLeft, mouthStretchRight,
+      mouthRollLower, mouthRollUpper, mouthShrugLower, mouthShrugUpper,
+      mouthPressLeft, mouthPressRight, mouthLowerDownLeft, mouthLowerDownRight,
+      mouthUpperUpLeft, mouthUpperUpRight, browDownLeft, browDownRight,
+      browInnerUp, browOuterUpLeft, browOuterUpRight, cheekPuff,
+      cheekSquintLeft, cheekSquintRight, noseSneerLeft, noseSneerRight,
+      tongueOut, headPitch, headYaw, headRoll)
 };
 
 // Blendshape calculator: 468 landmarks → ARKit blendshapes
@@ -121,6 +145,9 @@ public:
 
   // Main computation function
   ARKitBlendshapes Calculate(const Vision::FaceMeshResult &face);
+
+  // Auto-Tuning (Continuous Learning)
+  void PerformAutoTuning(const Vision::FaceMeshResult &face);
 
 private:
   // === Eye calculations ===
@@ -138,7 +165,7 @@ private:
   void CalculateBrowBlendshapes(const Vision::FaceMeshResult &face,
                                 ARKitBlendshapes &bs);
 
-  // === Helper utilities ===
+  // Helper utilities
   float Clamp(float value, float min = 0.0f, float max = 1.0f) const {
     return Vision::LandmarkUtils::Clamp(value, min, max);
   }
@@ -148,6 +175,21 @@ private:
     return Vision::LandmarkUtils::MapRange(value, in_min, in_max, out_min,
                                            out_max);
   }
+
+  // New: Deadzone to stabilize "Neutral" face
+  float ApplyDeadzone(float value, float threshold) const {
+    if (value < threshold)
+      return 0.0f;
+    return value;
+  }
+
+  // --- CALIBRATION ---
+public:
+  void SetCalibration(const UserCalibration &cal) { calibration_ = cal; }
+  UserCalibration &GetCalibration() { return calibration_; }
+
+private:
+  UserCalibration calibration_;
 };
 
 } // namespace Biomech

@@ -65,31 +65,38 @@ void BlendshapeCalculator::CalculateEyeBlendshapes(
   float ear_left = CalculateEyeAspectRatio(left_eye);
   float ear_right = CalculateEyeAspectRatio(right_eye);
 
-  // Map EAR to blink (inverted: low EAR = closed = high blink value)
-  // Typical range: EAR 0.15 (closed) to 0.30 (open)
-  // We want: EAR 0.15 → blink=1.0, EAR 0.30 → blink=0.0
-  constexpr float EAR_CLOSED = 0.15f;
-  constexpr float EAR_OPEN = 0.30f;
+  // Map EAR to blink using Calibration
+  // Inverted: low EAR = closed = high blink value
+  bs.eyeBlinkLeft =
+      1.0f - MapRange(ear_left, calibration_.ear_closed, calibration_.ear_open);
+  bs.eyeBlinkRight = 1.0f - MapRange(ear_right, calibration_.ear_closed,
+                                     calibration_.ear_open);
 
-  bs.eyeBlinkLeft = 1.0f - MapRange(ear_left, EAR_CLOSED, EAR_OPEN);
-  bs.eyeBlinkRight = 1.0f - MapRange(ear_right, EAR_CLOSED, EAR_OPEN);
+  // --- SMART BLINK SNAP (User Request) ---
+  // If blink is detected (mostly closed), force it to fully closed (1.0)
+  // This avoids "half-lidded" or vibrating eyes during fast blinks.
+  constexpr float BLINK_SNAP_THRESHOLD = 0.8f;
+  if (bs.eyeBlinkLeft > BLINK_SNAP_THRESHOLD)
+    bs.eyeBlinkLeft = 1.0f;
+  if (bs.eyeBlinkRight > BLINK_SNAP_THRESHOLD)
+    bs.eyeBlinkRight = 1.0f;
 
-  // Eye wide (surprise): when EAR is unusually high
-  constexpr float EAR_WIDE_THRESHOLD = 0.35f;
-  bs.eyeWideLeft = MapRange(ear_left, EAR_OPEN, EAR_WIDE_THRESHOLD);
-  bs.eyeWideRight = MapRange(ear_right, EAR_OPEN, EAR_WIDE_THRESHOLD);
+  // Eye wide (surprise): EAR > Normal
+  bs.eyeWideLeft =
+      MapRange(ear_left, calibration_.ear_open, calibration_.ear_wide);
+  bs.eyeWideRight =
+      MapRange(ear_right, calibration_.ear_open, calibration_.ear_wide);
 
-  // Eye squint: when eye is partially closed but not blinking
-  // Squint occurs around EAR 0.20-0.25
-  if (ear_left > EAR_CLOSED && ear_left < EAR_OPEN) {
-    bs.eyeSquintLeft = MapRange(ear_left, EAR_OPEN, EAR_CLOSED, 0.0f, 0.6f);
+  // Eye squint: Partial close
+  if (ear_left > calibration_.ear_closed && ear_left < calibration_.ear_open) {
+    bs.eyeSquintLeft = MapRange(ear_left, calibration_.ear_open,
+                                calibration_.ear_closed, 0.0f, 0.8f);
   }
-  if (ear_right > EAR_CLOSED && ear_right < EAR_OPEN) {
-    bs.eyeSquintRight = MapRange(ear_right, EAR_OPEN, EAR_CLOSED, 0.0f, 0.6f);
+  if (ear_right > calibration_.ear_closed &&
+      ear_right < calibration_.ear_open) {
+    bs.eyeSquintRight = MapRange(ear_right, calibration_.ear_open,
+                                 calibration_.ear_closed, 0.0f, 0.8f);
   }
-
-  // TODO: Eye look direction (requires iris tracking or separate gaze model)
-  // For now, leave eyeLookUp/Down/In/Out at 0.0
 }
 
 // === MOUTH BLENDSHAPES ===
@@ -97,8 +104,6 @@ void BlendshapeCalculator::CalculateEyeBlendshapes(
 float BlendshapeCalculator::CalculateMouthAspectRatio(
     const Vision::FaceMeshResult &face) {
   // Mouth Aspect Ratio (MAR)
-  // Similar to EAR but for mouth opening
-
   using Vision::LandmarkUtils::Distance2D;
 
   const auto &upper = face.MouthUpperLipTop();
@@ -106,22 +111,13 @@ float BlendshapeCalculator::CalculateMouthAspectRatio(
   const auto &left_corner = face.MouthLeftCorner();
   const auto &right_corner = face.MouthRightCorner();
 
-  // Vertical distance (lip separation)
   float vertical = Distance2D(upper, lower);
-
-  // Horizontal distance (mouth width)
   float horizontal = Distance2D(left_corner, right_corner);
 
   if (horizontal < 0.001f)
     return 0.0f;
 
-  // MAR = vertical / horizontal
-  // Closed: MAR ≈ 0.05-0.10
-  // Speaking: MAR ≈ 0.15-0.30
-  // Wide open: MAR ≈ 0.35-0.50+
-  float mar = vertical / horizontal;
-
-  return mar;
+  return vertical / horizontal;
 }
 
 void BlendshapeCalculator::CalculateMouthBlendshapes(
@@ -130,35 +126,55 @@ void BlendshapeCalculator::CalculateMouthBlendshapes(
   float mar = CalculateMouthAspectRatio(face);
 
   // Jaw open: based on MAR
-  // Closed: MAR ≈ 0.05, Open: MAR ≈ 0.40
-  constexpr float MAR_CLOSED = 0.05f;
-  constexpr float MAR_OPEN = 0.40f;
+  // Adjusted: More sensitive (0.40 -> 0.25)
+  constexpr float MAR_CLOSED = 0.02f;
+  constexpr float MAR_OPEN = 0.25f; // User reported "bas sa ouvre pas"
   bs.jawOpen = MapRange(mar, MAR_CLOSED, MAR_OPEN);
 
-  // Smile detection: mouth corners elevated relative to center
+  // Smile detection: Updated logic (Reference to Lip Center instead of
+  // Chin/Nose)
   using Vision::LandmarkUtils::Distance2D;
 
   const auto &left_corner = face.MouthLeftCorner();
   const auto &right_corner = face.MouthRightCorner();
-  const auto &nose_tip = face.NoseTip();
-  const auto &chin = face.Chin();
+  const auto &upper_lip = face.MouthUpperLipTop();
+  const auto &lower_lip = face.MouthLowerLipBottom();
 
-  // Calculate baseline (neutral) Y position for mouth corners
-  // Approximate: midway between nose and chin
-  float baseline_y = (nose_tip.y + chin.y) * 0.5f;
+  // Calculate Mouth Center Y
+  float mouth_center_y = (upper_lip.y + lower_lip.y) * 0.5f;
 
-  // Smile: corners above baseline
-  float left_elevation =
-      baseline_y - left_corner.y; // Positive = above baseline
-  float right_elevation = baseline_y - right_corner.y;
+  // Smile: Corners ABOVE center (Y is smaller)
+  float left_elevation = mouth_center_y - left_corner.y;
+  float right_elevation = mouth_center_y - right_corner.y;
 
-  // Map elevation to smile (typical range: -0.02 to +0.05)
-  bs.mouthSmileLeft = MapRange(left_elevation, -0.01f, 0.04f);
-  bs.mouthSmileRight = MapRange(right_elevation, -0.01f, 0.04f);
+  // Sensitive smile thresholds
+  // Sensitive smile thresholds
+  float SMILE_THRESH_MIN = 0.005f; // Slight lift
+  float SMILE_THRESH_MAX = calibration_.smile_elevation_max;
 
-  // Frown: corners below baseline (negative elevation)
-  bs.mouthFrownLeft = MapRange(-left_elevation, -0.01f, 0.03f);
-  bs.mouthFrownRight = MapRange(-right_elevation, -0.01f, 0.03f);
+  bs.mouthSmileLeft =
+      MapRange(left_elevation, SMILE_THRESH_MIN, SMILE_THRESH_MAX);
+  bs.mouthSmileRight =
+      MapRange(right_elevation, SMILE_THRESH_MIN, SMILE_THRESH_MAX);
+
+  // FIX: Suppress smile when jaw is open (prevents "Fake Smile" on open mouth)
+  // When jaw opens, corners naturally move differently. We subtract jaw
+  // influence.
+  float suppression = bs.jawOpen * 0.4f;
+  bs.mouthSmileLeft = Clamp(bs.mouthSmileLeft - suppression, 0.0f, 1.0f);
+  bs.mouthSmileRight = Clamp(bs.mouthSmileRight - suppression, 0.0f, 1.0f);
+
+  // Apply Deadzones (Stabilize Neutral)
+  bs.mouthSmileLeft = ApplyDeadzone(bs.mouthSmileLeft, 0.05f);
+  bs.mouthSmileRight = ApplyDeadzone(bs.mouthSmileRight, 0.05f);
+
+  // Frown: Corners BELOW center (Y is larger -> elevation negative)
+  // Adjusted sensitivity
+  bs.mouthFrownLeft = MapRange(-left_elevation, SMILE_THRESH_MIN, 0.03f);
+  bs.mouthFrownRight = MapRange(-right_elevation, SMILE_THRESH_MIN, 0.03f);
+
+  bs.mouthFrownLeft = ApplyDeadzone(bs.mouthFrownLeft, 0.05f);
+  bs.mouthFrownRight = ApplyDeadzone(bs.mouthFrownRight, 0.05f);
 
   // Mouth funnel (lips forward, like "ooo")
   // Approximation: narrow mouth width with some opening
@@ -228,6 +244,48 @@ void BlendshapeCalculator::CalculateBrowBlendshapes(
   bs.browDownRight = MapRange(-right_inner_elevation, -0.01f, 0.025f);
 
   // TODO: Cheek and nose blendshapes (require more landmark analysis)
+}
+
+// === AUTO-TUNING ===
+void BlendshapeCalculator::PerformAutoTuning(
+    const Vision::FaceMeshResult &face) {
+  if (!face.IsValid())
+    return;
+
+  // 1. Calculate Eye Aspect Ratio (Maximum of both)
+  auto left_eye = face.GetLeftEyeLandmarks();
+  auto right_eye = face.GetRightEyeLandmarks();
+  float ear_left = CalculateEyeAspectRatio(left_eye);
+  float ear_right = CalculateEyeAspectRatio(right_eye);
+  float max_ear = std::max(ear_left, ear_right);
+
+  // 2. Calculate Mouth Width (Not currently used in AutoUpdate but useful for
+  // future) Reuse CalculateMouthAspectRatio or just dist float mar =
+  // CalculateMouthAspectRatio(face); float mouth_width = ...
+
+  // 3. Calculate Brow Elevation (vs Nose)
+  const auto &nose_bridge = face.NoseBridge();
+  // We want MAX elevation (Surprise)
+  // Lower Y = Higher Brow
+  float min_brow_y =
+      std::min({face.LeftBrowInner().y, face.LeftBrowOuter().y,
+                face.RightBrowInner().y, face.RightBrowOuter().y});
+  // Elevation = Neutral - Current. But here we just pass raw Y to calibration?
+  // UserCalibration::UpdateAuto logic needs to be clear on what it takes.
+  // In UserCalibration.hpp we wrote: UpdateAuto(current_ear,
+  // current_mouth_width, current_brow_elev)
+
+  // Checking UserCalibration.hpp again:
+  // "if (current_ear > ear_wide)"
+
+  // So we pass the "Wide" metric.
+
+  // For brows, we didn't fully implement brow auto-tuning in header yet, but
+  // passed it. Let's pass 0.0f for now for mouth/brows if not ready, or
+  // implement basic.
+
+  // Calling the calibration update
+  calibration_.UpdateAuto(max_ear, 0.0f, 0.0f);
 }
 
 } // namespace Biomech

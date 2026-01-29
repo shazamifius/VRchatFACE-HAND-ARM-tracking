@@ -8,28 +8,14 @@
 #include <imgui_impl_opengl3.h>
 #include <qrencode.h>
 
+#include "biomech/UserCalibration.hpp"
+
 // Forward decl
 struct GLFWwindow;
 
 namespace UI {
 
-// Shared body state for Debugging/Visualization
-struct BodyState {
-  // Face
-  float jaw_open = 0.0f;
-  float blink_l = 0.0f;
-  float blink_r = 0.0f;
-  float tongue_out = 0.0f;
-
-  // Hands (0.0 = Open, 1.0 = Closed)
-  float hand_l_curl = 0.0f;
-  float hand_r_curl = 0.0f;
-
-  // Arms / Body Control
-  bool test_mode = false;    // If true, ignore AI and use these values
-  float t_pose_blend = 1.0f; // 1.0 = T-Pose, 0.0 = Neutral
-  bool wave_anim = false;    // Simple wave animation
-};
+// BodyState struct removed as it was for 3D puppet control
 
 class MainWindow {
 public:
@@ -49,12 +35,18 @@ public:
                                        col_top, col_top, col_bot, col_bot);
   }
 
-  void Render(unsigned int camera_texture_id,
-              unsigned int avatar_preview_texture_id, int width, int height,
-              BodyState &body_debug, float fps, long long latency_us,
-              int &requested_camera_index, const bool camera_available[5]) {
+  void Render(unsigned int camera_texture_id, int width, int height, float fps,
+              long long latency_us, int &requested_camera_index,
+              const bool camera_available[5],
+              Biomech::CalibrationCommand &calibration_cmd,
+              const std::string &feedback_msg, int calib_state_int,
+              int calib_samples_collected, int calib_total_samples,
+              double countdown_remaining, bool is_loading, bool &trigger_rescan,
+              bool phone_connected, const std::string &phone_info) {
     // Custom Background
     DrawBackground(width, height);
+
+    // ... (rest of function until Wizard) ...
 
     // DockSpace
     ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
@@ -83,12 +75,37 @@ public:
       ImGui::Text("Select Camera");
       static int current_cam = 0;
 
+      // Phone Camera Selection
+      ImGui::Spacing();
+      {
+        ImVec4 dot_color = phone_connected ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f)
+                                           : ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, dot_color);
+        ImGui::Text("●");
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+
+        if (current_cam == 99) {
+          ImGui::PushStyleColor(ImGuiCol_Button,
+                                ImVec4(0.0f, 0.6f, 0.7f, 1.0f));
+        }
+        if (ImGui::Button("Phone Camera (Network)", ImVec2(-1, 0))) {
+          current_cam = 99;
+          requested_camera_index = 99;
+        }
+        if (current_cam == 99) {
+          ImGui::PopStyleColor();
+        }
+      }
+      ImGui::Spacing();
+      ImGui::Separator();
+      ImGui::Spacing();
+
       for (int i = 0; i < 5; i++) {
         // Status indicator (colored dot)
         ImVec4 dot_color = camera_available[i] ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f)
                                                :               // Green
                                ImVec4(1.0f, 0.0f, 0.0f, 1.0f); // Red
-
         ImGui::PushStyleColor(ImGuiCol_Text, dot_color);
         ImGui::Text("●");
         ImGui::PopStyleColor();
@@ -118,39 +135,76 @@ public:
       }
 
       ImGui::Spacing();
-      if (ImGui::Button("AUTO-CONFIG VRCHAT", ImVec2(-1, 35))) {
-        // TODO: Trigger auto config
+      // Rescan Button (Small, less prominent)
+      if (ImGui::Button("↻ Rescan Cameras")) {
+        trigger_rescan = true;
       }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Refresh camera list if you plugged in a new device");
+
+      ImGui::Spacing();
+
+      // Phone Connection Status
+      ImGui::Text("Phone Connection");
+
+      ImVec4 phone_dot_color = phone_connected ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f)
+                                               : ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
+      ImGui::PushStyleColor(ImGuiCol_Text, phone_dot_color);
+      ImGui::Text("●");
+      ImGui::PopStyleColor();
+      ImGui::SameLine();
+      ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                         phone_connected ? phone_info.c_str() : "Disconnected");
+
+      ImGui::Spacing();
+      // Auto-config removed placeholder logic for now
     }
 
     ImGui::Spacing();
-    if (ImGui::CollapsingHeader("DEBUG / TEST MODE",
+    ImGui::Separator();
+
+    // --- CALIBRATION WIZARD ---
+    if (ImGui::CollapsingHeader("FACE CALIBRATION",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
-      ImGui::Checkbox("ENABLE TEST MODE", &body_debug.test_mode);
+      ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+                         "[ Calibration Wizard ]");
+      ImGui::TextWrapped("Click buttons while holding the expression.");
 
-      if (body_debug.test_mode) {
-        ImGui::Indent();
-        ImGui::TextColored(ImVec4(0.0f, 0.8f, 1.0f, 1.0f), "Face Controls");
-        ImGui::SliderFloat("Jaw Open", &body_debug.jaw_open, 0.0f, 1.0f);
-        ImGui::SliderFloat("Blink (L)", &body_debug.blink_l, 0.0f, 1.0f);
-        ImGui::SliderFloat("Blink (R)", &body_debug.blink_r, 0.0f, 1.0f);
-        ImGui::SliderFloat("Tongue", &body_debug.tongue_out, 0.0f, 1.0f);
-
-        ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.0f, 0.8f, 1.0f, 1.0f), "Hand Controls");
-        ImGui::SliderFloat("L Hand Curl", &body_debug.hand_l_curl, 0.0f, 1.0f);
-        ImGui::SliderFloat("R Hand Curl", &body_debug.hand_r_curl, 0.0f, 1.0f);
-
-        ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.0f, 0.8f, 1.0f, 1.0f), "Body Controls");
-        ImGui::SliderFloat("T-Pose Blend", &body_debug.t_pose_blend, 0.0f,
-                           1.0f);
-        ImGui::Checkbox("Wave Animation", &body_debug.wave_anim);
-
-        ImGui::Unindent();
-      } else {
-        ImGui::TextDisabled("Enable Test Mode to manually\\ncontrol skeleton.");
+      ImGui::Spacing();
+      // 1. NEUTRAL
+      if (ImGui::Button("1. Capture NEUTRAL", ImVec2(-1, 0))) {
+        calibration_cmd = Biomech::CalibrationCommand::NEUTRAL;
       }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Relax your face completely. Look forward.");
+
+      ImGui::Spacing();
+      // 2. SMILE
+      if (ImGui::Button("2. Capture SMILE", ImVec2(-1, 0))) {
+        calibration_cmd = Biomech::CalibrationCommand::SMILE;
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Smile as wide as you can!");
+
+      ImGui::Spacing();
+      // 3. EYES CLOSED
+      if (ImGui::Button("3. Capture EYES CLOSED", ImVec2(-1, 0))) {
+        calibration_cmd = Biomech::CalibrationCommand::BLINK_CLOSED;
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Close your eyes completely.");
+
+      ImGui::Spacing();
+      ImGui::Separator();
+
+      // SAVE
+      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.5f, 0.2f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                            ImVec4(0.0f, 0.7f, 0.3f, 1.0f));
+      if (ImGui::Button("SAVE PROFILE", ImVec2(-1, 0))) {
+        calibration_cmd = Biomech::CalibrationCommand::SAVE;
+      }
+      ImGui::PopStyleColor(2);
     }
 
     ImGui::Spacing();
@@ -187,7 +241,22 @@ public:
     float avail_x = ImGui::GetContentRegionAvail().x;
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail_x - qr_size) * 0.5f);
 
-    if (qr_texture_id_ != 0) {
+    if (is_loading) {
+      ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail_x - qr_size) * 0.5f);
+      // Placeholder box
+      ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0.5f));
+      ImGui::BeginChild("QRLoading", ImVec2(qr_size, qr_size), true);
+
+      // Center loading text
+      std::string load_txt = "Starting Tunnel...";
+      ImVec2 txt_sz = ImGui::CalcTextSize(load_txt.c_str());
+      ImGui::SetCursorPos(
+          ImVec2((qr_size - txt_sz.x) * 0.5f, (qr_size - txt_sz.y) * 0.5f));
+      ImGui::TextColored(ImVec4(1, 0.8f, 0, 1), "%s", load_txt.c_str());
+
+      ImGui::EndChild();
+      ImGui::PopStyleColor();
+    } else if (qr_texture_id_ != 0) {
       ImGui::Image((ImTextureID)(intptr_t)qr_texture_id_,
                    ImVec2(qr_size, qr_size), ImVec2(0, 0), ImVec2(1, 1),
                    ImVec4(1, 1, 1, 1), ImVec4(0, 1, 0.8f, 0.5f)); // Cyan border
@@ -195,35 +264,139 @@ public:
     ImGui::End();
 
     // --- Main View (Center) ---
-    // We want tabs for different views
+    // Single View: Camera Feed
     ImGui::Begin("VISUALIZER", nullptr, ImGuiWindowFlags_NoCollapse);
-    if (ImGui::BeginTabBar("MainTabs")) {
-      if (ImGui::BeginTabItem("LIVE PREVIEW (3D)")) {
-        // 3D Avatar Preview
-        ImVec2 avail = ImGui::GetContentRegionAvail();
-        if (avatar_preview_texture_id != 0) {
-          // Keep aspect ratio
-          float aspect = (float)width / (float)height * 0.5f; // Rough estimate
-          // We just stretch to fit for now, 3D render is usually square-ish
-          ImGui::Image((ImTextureID)(intptr_t)avatar_preview_texture_id, avail,
-                       ImVec2(0, 1), ImVec2(1, 0));
-        } else {
-          ImGui::Text("Waiting for 3D Renderer...");
-        }
-        ImGui::EndTabItem();
-      }
-      if (ImGui::BeginTabItem("CAMERA FEED")) {
-        // Raw Camera Feed
-        ImVec2 avail = ImGui::GetContentRegionAvail();
-        if (camera_texture_id != 0) {
-          ImGui::Image((ImTextureID)(intptr_t)camera_texture_id, avail);
-        } else {
-          ImGui::TextDisabled("NO SIGNAL");
-        }
-        ImGui::EndTabItem();
-      }
-      ImGui::EndTabBar();
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImVec2 window_pos = ImGui::GetWindowPos();
+    ImVec2 content_offset = ImGui::GetCursorScreenPos();
+
+    if (camera_texture_id != 0) {
+      // Maintain aspect ratio if possible, or fill?
+      // Usually users want to see the whole image.
+      // Image is often 16:9 or 4:3.
+      // avail.x / avail.y vs img definitions.
+      // Let's just fit width and adjust height, or fit to avail.
+      ImGui::Image((ImTextureID)(intptr_t)camera_texture_id, avail);
+    } else {
+      // Centered Text
+      ImVec2 text_size = ImGui::CalcTextSize("NO SIGNAL");
+      ImGui::SetCursorPos(ImVec2((avail.x - text_size.x) * 0.5f,
+                                 (avail.y - text_size.y) * 0.5f));
+      ImGui::TextDisabled("NO SIGNAL");
     }
+
+    // --- CALIBRATION OVERLAYS ---
+    ImDrawList *draw_list = ImGui::GetWindowDrawList();
+
+    // 0=IDLE, 1=COUNTDOWN, 2=SAMPLING
+    if (calib_state_int == 1) {
+      // COUNTDOWN OVERLAY
+      int sec_left = (int)std::ceil(countdown_remaining);
+      if (sec_left < 1)
+        sec_left = 1;
+      std::string text = "HOLD POSE: " + std::to_string(sec_left);
+
+      // Calculate centered position
+      ImFont *font = ImGui::GetFont();
+      float font_size = 72.0f;
+      ImVec2 text_size =
+          font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, text.c_str());
+      ImVec2 text_pos =
+          ImVec2(content_offset.x + (avail.x - text_size.x) * 0.5f,
+                 content_offset.y + (avail.y - text_size.y) * 0.5f);
+
+      // Draw semi-transparent background
+      ImVec2 bg_padding(20, 15);
+      draw_list->AddRectFilled(
+          ImVec2(text_pos.x - bg_padding.x, text_pos.y - bg_padding.y),
+          ImVec2(text_pos.x + text_size.x + bg_padding.x,
+                 text_pos.y + text_size.y + bg_padding.y),
+          IM_COL32(0, 0, 0, 180), 10.0f);
+
+      // Draw text with glow effect
+      draw_list->AddText(font, font_size,
+                         ImVec2(text_pos.x + 2, text_pos.y + 2),
+                         IM_COL32(0, 0, 0, 200), text.c_str());
+      draw_list->AddText(font, font_size, text_pos, IM_COL32(255, 200, 0, 255),
+                         text.c_str());
+    } else if (calib_state_int == 2) {
+      // SAMPLING OVERLAY
+      std::string text = "SAMPLING... " +
+                         std::to_string(calib_samples_collected) + "/" +
+                         std::to_string(calib_total_samples);
+
+      ImFont *font = ImGui::GetFont();
+      float font_size = 48.0f;
+      ImVec2 text_size =
+          font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, text.c_str());
+      ImVec2 text_pos =
+          ImVec2(content_offset.x + (avail.x - text_size.x) * 0.5f,
+                 content_offset.y + (avail.y - text_size.y) * 0.5f);
+
+      // Background
+      ImVec2 bg_padding(20, 15);
+      draw_list->AddRectFilled(
+          ImVec2(text_pos.x - bg_padding.x, text_pos.y - bg_padding.y),
+          ImVec2(text_pos.x + text_size.x + bg_padding.x,
+                 text_pos.y + text_size.y + bg_padding.y),
+          IM_COL32(0, 0, 0, 180), 10.0f);
+
+      // Text
+      draw_list->AddText(font, font_size,
+                         ImVec2(text_pos.x + 2, text_pos.y + 2),
+                         IM_COL32(0, 0, 0, 200), text.c_str());
+      draw_list->AddText(font, font_size, text_pos, IM_COL32(0, 255, 200, 255),
+                         text.c_str());
+
+      // Progress bar
+      float progress =
+          (float)calib_samples_collected / (float)calib_total_samples;
+      float bar_width = 300.0f;
+      float bar_height = 8.0f;
+      ImVec2 bar_pos = ImVec2(content_offset.x + (avail.x - bar_width) * 0.5f,
+                              text_pos.y + text_size.y + 30.0f);
+
+      // Background bar
+      draw_list->AddRectFilled(
+          bar_pos, ImVec2(bar_pos.x + bar_width, bar_pos.y + bar_height),
+          IM_COL32(50, 50, 50, 200), 4.0f);
+
+      // Progress bar
+      draw_list->AddRectFilled(
+          bar_pos,
+          ImVec2(bar_pos.x + bar_width * progress, bar_pos.y + bar_height),
+          IM_COL32(0, 255, 200, 255), 4.0f);
+    }
+
+    // SUCCESS OVERLAY (when feedback contains "Success" or "Saved")
+    if (feedback_msg.find("Success") != std::string::npos ||
+        feedback_msg.find("Saved") != std::string::npos) {
+      std::string text = "✓ " + feedback_msg;
+
+      ImFont *font = ImGui::GetFont();
+      float font_size = 56.0f;
+      ImVec2 text_size =
+          font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, text.c_str());
+      ImVec2 text_pos =
+          ImVec2(content_offset.x + (avail.x - text_size.x) * 0.5f,
+                 content_offset.y + avail.y * 0.3f);
+
+      // Background
+      ImVec2 bg_padding(25, 18);
+      draw_list->AddRectFilled(
+          ImVec2(text_pos.x - bg_padding.x, text_pos.y - bg_padding.y),
+          ImVec2(text_pos.x + text_size.x + bg_padding.x,
+                 text_pos.y + text_size.y + bg_padding.y),
+          IM_COL32(0, 100, 0, 200), 10.0f);
+
+      // Text
+      draw_list->AddText(font, font_size,
+                         ImVec2(text_pos.x + 2, text_pos.y + 2),
+                         IM_COL32(0, 0, 0, 200), text.c_str());
+      draw_list->AddText(font, font_size, text_pos, IM_COL32(0, 255, 100, 255),
+                         text.c_str());
+    }
+
     ImGui::End();
   }
 

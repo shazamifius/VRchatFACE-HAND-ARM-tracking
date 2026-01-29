@@ -36,39 +36,68 @@ public:
       // Inspect Model Input/Output
       Ort::AllocatorWithDefaultOptions allocator;
 
-      // Get Input Name
+      // Print all inputs
+      std::cout << "[FaceMesh] Inputs:" << std::endl;
       size_t num_input_nodes = session_->GetInputCount();
-      if (num_input_nodes > 0) {
-        auto input_name_ptr = session_->GetInputNameAllocated(0, allocator);
-        input_name_ = std::string(input_name_ptr.get());
-
-        auto type_info = session_->GetInputTypeInfo(0);
+      for (size_t i = 0; i < num_input_nodes; i++) {
+        auto name_ptr = session_->GetInputNameAllocated(i, allocator);
+        auto type_info = session_->GetInputTypeInfo(i);
         auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
-        input_dims_ =
-            tensor_info.GetShape(); // e.g. [1, 3, 192, 192] or [1, 3, 256, 256]
+        auto shape = tensor_info.GetShape();
+        std::cout << "  " << i << ": " << name_ptr.get() << " [";
+        for (size_t j = 0; j < shape.size(); j++)
+          std::cout << shape[j] << (j < shape.size() - 1 ? "," : "");
+        std::cout << "]" << std::endl;
 
-        // Validate input dims
-        if (input_dims_.size() == 4) {
-          input_height_ = static_cast<int>(input_dims_[2]);
-          input_width_ = static_cast<int>(input_dims_[3]);
-          // Handle dynamic dimensions (-1)
-          if (input_height_ == -1)
-            input_height_ = 192; // Default fallback
-          if (input_width_ == -1)
-            input_width_ = 192;
+        // Store first input props as primary
+        if (i == 0) {
+          input_name_ = std::string(name_ptr.get());
+          input_dims_ = shape;
+          if (shape.size() == 4) {
+            // Default NCHW
+            input_is_nhwc_ = false;
+            input_height_ = static_cast<int>(shape[2]);
+            input_width_ = static_cast<int>(shape[3]);
+
+            // Check for NHWC (Channel last = 3)
+            if (shape[3] == 3) {
+              input_is_nhwc_ = true;
+              input_height_ = static_cast<int>(shape[1]);
+              input_width_ = static_cast<int>(shape[2]);
+            }
+            // Check/verify NCHW (Channel first = 3)
+            else if (shape[1] == 3) {
+              input_is_nhwc_ = false;
+              // already set above
+            }
+
+            if (input_height_ == -1)
+              input_height_ = 192;
+            if (input_width_ == -1)
+              input_width_ = 192;
+          }
         }
       }
 
-      // Get Output Name
+      // Print all outputs
+      std::cout << "[FaceMesh] Outputs:" << std::endl;
       size_t num_output_nodes = session_->GetOutputCount();
-      if (num_output_nodes > 0) {
-        auto output_name_ptr = session_->GetOutputNameAllocated(0, allocator);
-        output_name_ = std::string(output_name_ptr.get());
-      }
+      for (size_t i = 0; i < num_output_nodes; i++) {
+        auto name_ptr = session_->GetOutputNameAllocated(i, allocator);
+        auto type_info = session_->GetOutputTypeInfo(i);
+        auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
+        auto shape = tensor_info.GetShape();
 
-      std::cout << "[FaceMesh] Input: " << input_name_ << " (" << input_width_
-                << "x" << input_height_ << ")" << std::endl;
-      std::cout << "[FaceMesh] Output: " << output_name_ << std::endl;
+        // AUTO-DETECT: Capture output name
+        if (i == 0) {
+          output_name_ = std::string(name_ptr.get());
+        }
+
+        std::cout << "  " << i << ": " << name_ptr.get() << " [";
+        for (size_t j = 0; j < shape.size(); j++)
+          std::cout << shape[j] << (j < shape.size() - 1 ? "," : "");
+        std::cout << "]" << std::endl;
+      }
 
     } catch (const Ort::Exception &e) {
       std::cerr << "[FaceMesh] ORT Exception: " << e.what() << "\n";
@@ -90,28 +119,51 @@ public:
 
     // 1. Preprocessing (Resize + CHW + Normalize)
     // MediaPipe usually expects RGB, float [0, 1]
+    // 1. Preprocessing
     cv::Mat resized;
     cv::resize(frame, resized, cv::Size(input_width_, input_height_));
-
-    // Convert BGR (OpenCV) to RGB
     cv::cvtColor(resized, resized, cv::COLOR_BGR2RGB);
 
-    // Convert to float and normalize [0, 1]
-    cv::Mat dnn_blob = cv::dnn::blobFromImage(
-        resized, 1.0 / 255.0, cv::Size(), cv::Scalar(0, 0, 0), false, false);
+    // Prepare input tensor data
+    // Ort expects Float32.
+    cv::Mat float_data;
+    resized.convertTo(float_data, CV_32F, 1.0f / 255.0f);
+
+    cv::Mat final_blob;
+
+    if (!input_is_nhwc_) {
+      // NCHW: Use blobFromImage logic (Planar)
+      // Note: blobFromImage can do resize/swap/mean/scale.
+      // But since we did manual resize/convert, we just want to permute.
+      // It's safer to just use blobFromImage on original frame directly if we
+      // want speed, but here we already have 'float_data' (NHWC). Let's use
+      // blobFromImage on the float_data. Actually blobFromImage expects 8U
+      // usually or handles 32F.
+      cv::dnn::blobFromImage(float_data, final_blob); // Default is NCHW
+    } else {
+      // NHWC: Use data directly
+      final_blob = float_data;
+    }
 
     // 2. Wrap in Tensor
+    // Calculate total float elements
     size_t input_tensor_size = 1 * 3 * input_width_ * input_height_;
 
     auto memory_info =
         Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
-    // Input/Output Names
     const char *input_names[] = {input_name_.c_str()};
     const char *output_names[] = {output_name_.c_str()};
 
+    // Ensure data pointer is valid.
+    // If blobFromImage was used, final_blob is continuous NCHW.
+    // If float_data was used, it is continuous NHWC.
+    if (!final_blob.isContinuous()) {
+      final_blob = final_blob.clone();
+    }
+
     Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
-        memory_info, dnn_blob.ptr<float>(), input_tensor_size,
+        memory_info, final_blob.ptr<float>(), input_tensor_size,
         input_dims_.data(), input_dims_.size());
 
     // 3. Run
@@ -128,7 +180,7 @@ public:
                                  frame.cols, frame.rows);
 
     } catch (const Ort::Exception &e) {
-      // std::cerr << "[FaceMesh] Inference Error: " << e.what() << "\n";
+      std::cerr << "[FaceMesh] ORT Inference Error: " << e.what() << "\n";
       return false;
     }
   }
@@ -147,9 +199,8 @@ private:
 
     if (total_elements != 1404 &&
         total_elements != 1404 + 30) { // sometimes 478 landmarks
-      // Just warn sparingly?
-      // std::cerr << "[FaceMesh] Unexpected output size: " << total_elements <<
-      // "\n"; Try to parse as much as possible if valid? return false;
+      std::cerr << "[FaceMesh] Unexpected output size: " << total_elements
+                << ". Expected 1404.\n";
       if (total_elements < 1404)
         return false;
     }
@@ -221,6 +272,7 @@ private:
   std::vector<int64_t> input_dims_ = {1, 3, 192, 192};
   int input_width_ = 192;
   int input_height_ = 192;
+  bool input_is_nhwc_ = false;
 };
 
 } // namespace Vision

@@ -45,6 +45,41 @@ public:
     return x_hat;
   }
 
+  float FilterScalar(float noisy_val, double timestamp_s) {
+    if (first_update_) {
+      // For scalar, we can just use the Vector3 implementation with y=0, z=0
+      // But separate state is cleaner if we want to support both.
+      // However, usually one filter instance = one signal.
+      // So we can reuse the Vector3 state variables (x_prev_.x)
+
+      first_update_ = false;
+      x_prev_ = Core::Vector3(noisy_val, 0.0f, 0.0f);
+      dx_prev_ = Core::Vector3(0.0f);
+      t_prev_ = timestamp_s;
+      return noisy_val;
+    }
+
+    double dt = timestamp_s - t_prev_;
+    if (dt <= 0.0)
+      return x_prev_.x;
+
+    float alpha_d = Alpha(dt, params_.d_cutoff);
+    float dx = (noisy_val - x_prev_.x) / static_cast<float>(dt);
+    // float dx_hat = Core::MathUtils::Lerp(dx_prev_.x, dx, alpha_d);
+    float dx_hat = dx_prev_.x + (dx - dx_prev_.x) * alpha_d;
+
+    float cutoff = params_.min_cutoff + params_.beta * std::abs(dx_hat);
+    float alpha = Alpha(dt, cutoff);
+    // float x_hat = Core::MathUtils::Lerp(x_prev_.x, noisy_val, alpha);
+    float x_hat = x_prev_.x + (noisy_val - x_prev_.x) * alpha;
+
+    x_prev_.x = x_hat;
+    dx_prev_.x = dx_hat;
+    t_prev_ = timestamp_s;
+
+    return x_hat;
+  }
+
 private:
   Params params_;
   bool first_update_;

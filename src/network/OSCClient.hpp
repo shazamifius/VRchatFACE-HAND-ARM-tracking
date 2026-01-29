@@ -57,16 +57,54 @@ public:
     }
   }
 
+  // Send a pre-built bundle packet
+  void SendBundle(const std::vector<char> &bundle_packet) {
+    Send(bundle_packet);
+  }
+
   // Helper: Send a single float OSC message
   void SendFloat(const std::string &address, float value) {
     std::vector<char> packet = BuildOSCFloatMessage(address, value);
     Send(packet);
   }
 
-private:
-  // Build simple OSC message with float argument
-  std::vector<char> BuildOSCFloatMessage(const std::string &address,
-                                         float value) {
+  // Helper: Create a bundle builder
+  class BundleBuilder {
+  public:
+    BundleBuilder() {
+      // Bundle Header: "#bundle" + null (8 bytes total)
+      const char header[] = "#bundle\0";
+      bundle_.insert(bundle_.end(), header, header + 8);
+
+      // Timetag: 0 (Immediate) - 8 bytes
+      // 64-bit integer 0
+      for (int i = 0; i < 8; i++)
+        bundle_.push_back(0);
+    }
+
+    void AddFloat(const std::string &address, float value) {
+      // Use static method - no socket creation needed!
+      std::vector<char> msg = OSCClient::BuildOSCFloatMessage(address, value);
+
+      // Write size (4 bytes, big endian)
+      uint32_t size = static_cast<uint32_t>(msg.size());
+      uint32_t size_be = htonl(size);
+      const char *size_ptr = reinterpret_cast<const char *>(&size_be);
+      bundle_.insert(bundle_.end(), size_ptr, size_ptr + 4);
+
+      // Write message
+      bundle_.insert(bundle_.end(), msg.begin(), msg.end());
+    }
+
+    std::vector<char> Build() { return bundle_; }
+
+  private:
+    std::vector<char> bundle_;
+  };
+
+  // Build simple OSC message with float argument (Static for performance)
+  static std::vector<char> BuildOSCFloatMessage(const std::string &address,
+                                                float value) {
     std::vector<char> packet;
 
     // OSC Address
@@ -98,6 +136,8 @@ private:
 
     return packet;
   }
+
+private:
   SOCKET sockfd_ = INVALID_SOCKET;
   struct sockaddr_in server_addr_;
 };
