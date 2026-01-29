@@ -373,21 +373,29 @@
                 });
 
                 video.srcObject = stream;
-                video.onloadeddata = () => {
-                    console.log('[Camera] Resolution:', video.videoWidth, 'x', video.videoHeight);
 
-                    // Start MediaPipe processing
-                    const camera = new Camera(video, {
-                        onFrame: async () => {
-                            await faceMesh.send({ image: video });
-                        },
-                        width: 640,
-                        height: 480
-                    });
-                    camera.start();
+                // Wait for video to be ready
+                await new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        console.log('[Camera] Resolution:', video.videoWidth, 'x', video.videoHeight);
+                        video.play();
+                        resolve();
+                    };
+                });
 
-                    msg.textContent = 'Tracking started...';
-                };
+                msg.textContent = 'Processing...';
+
+                // Start MediaPipe processing loop (manual requestAnimationFrame)
+                async function processFrame() {
+                    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                        await faceMesh.send({ image: video });
+                    }
+                    requestAnimationFrame(processFrame);
+                }
+
+                processFrame();
+                console.log('[MediaPipe] Processing loop started');
+
             } catch (e) {
                 msg.textContent = `Camera Error: ${e.message}`;
                 console.error('[ERROR] Camera:', e);
