@@ -82,6 +82,17 @@
         button:active {
             background: rgba(255, 255, 255, 0.4);
         }
+
+        /* Visual feedback for crop area */
+        #crop-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            border: 2px solid rgba(0, 255, 0, 0.5);
+            pointer-events: none;
+            display: none;
+        }
     </style>
 </head>
 
@@ -91,9 +102,10 @@
         <div id="debug-info"></div>
     </div>
     <video id="cam" autoplay playsinline muted></video>
+    <div id="crop-overlay"></div>
     <div id="controls">
         <button id="btnSwitch">📷 Switch Cam</button>
-        <button id="btnQual">HD Quality</button>
+        <button id="btnQual">Low Quality (Fast)</button>
     </div>
     <canvas id="canvas" style="display:none;"></canvas>
 
@@ -104,12 +116,14 @@
         const dot = document.getElementById('dot');
         const msg = document.getElementById('msg');
         const debugInfo = document.getElementById('debug-info');
+        const cropOverlay = document.getElementById('crop-overlay');
 
         let streaming = true;
-        let quality = 0.6; // JPEG quality
-        let interval = 33; // ~30 FPS
-        let facingMode = 'user'; // 'user' or 'environment'
-        let postUrl = '/video'; // Will be set based on tunnel parameter
+        let quality = 0.4; // OPTIMIZED: Lower quality for faster upload
+        let interval = 100; // OPTIMIZED: 10 FPS max (realistic for upload)
+        let facingMode = 'user';
+        let postUrl = '/video';
+        let useCrop = true; // OPTIMIZED: Always use crop for face tracking
 
         // CRITICAL FIX: Parse tunnel URL from query string
         function getTargetUrl() {
@@ -117,11 +131,9 @@
             const tunnelUrl = urlParams.get('tunnel');
 
             if (tunnelUrl) {
-                // Ensure protocol is present
                 const target = tunnelUrl.startsWith('http') ? tunnelUrl : 'https://' + tunnelUrl;
                 return target + '/video';
             } else {
-                // Fallback to relative URL (local testing)
                 return '/video';
             }
         }
@@ -129,41 +141,54 @@
         postUrl = getTargetUrl();
 
         // Display debug info
-        debugInfo.innerHTML = `Target: ${postUrl}<br>Page: ${window.location.href}`;
+        debugInfo.innerHTML = `Target: ${postUrl}<br>Crop: ${useCrop ? 'ON (192x192)' : 'OFF'}`;
         console.log('[DEBUG] Target URL:', postUrl);
-        console.log('[DEBUG] Full page URL:', window.location.href);
 
-        // Start Camera
+        // Start Camera - OPTIMIZED RESOLUTION
         async function startCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: {
                         facingMode: facingMode,
-                        width: { ideal: 640 },
-                        height: { ideal: 480 },
-                        frameRate: { ideal: 30 }
+                        width: { ideal: 320 },  // OPTIMIZED: Reduced from 640
+                        height: { ideal: 240 }, // OPTIMIZED: Reduced from 480
+                        frameRate: { ideal: 15 } // OPTIMIZED: Reduced from 30
                     },
                     audio: false
                 });
                 video.srcObject = stream;
                 msg.textContent = "Camera Ready - Sending...";
-                console.log('[INFO] Camera started successfully');
+                console.log('[INFO] Camera started (320x240@15fps)');
+
+                // Update crop overlay size
+                video.onloadedmetadata = () => {
+                    const cropSize = Math.min(video.videoWidth, video.videoHeight);
+                    cropOverlay.style.width = cropSize + 'px';
+                    cropOverlay.style.height = cropSize + 'px';
+                };
             } catch (e) {
                 msg.textContent = "Cam Error: " + e.message;
                 console.error('[ERROR] Camera error:', e);
             }
         }
 
-        // Send Frame Loop with fetch POST
+        // Send Frame Loop with CROP optimization
         let lastTime = 0;
         let frameCount = 0;
         let errorCount = 0;
+        let sending = false; // Prevent overlapping sends
+        let fpsCounter = 0;
+        let fpsTime = Date.now();
 
         async function sendFrame(time) {
-            if (!streaming) return;
+            if (!streaming || sending) {
+                requestAnimationFrame(sendFrame);
+                return;
+            }
 
             if (time - lastTime >= interval) {
                 if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    // Draw full video to canvas
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
 
@@ -175,15 +200,35 @@
                     ctx.drawImage(video, 0, 0);
                     ctx.restore();
 
+                    // OPTIMIZATION: Crop to center 192x192 (face region)
+                    let finalCanvas = canvas;
+
+                    if (useCrop) {
+                        const cropSize = 192;
+                        const cropX = (canvas.width - cropSize) / 2;
+                        const cropY = (canvas.height - cropSize) / 2;
+
+                        const croppedCanvas = document.createElement('canvas');
+                        croppedCanvas.width = cropSize;
+                        croppedCanvas.height = cropSize;
+                        croppedCanvas.getContext('2d').drawImage(
+                            canvas, cropX, cropY, cropSize, cropSize,
+                            0, 0, cropSize, cropSize
+                        );
+
+                        finalCanvas = croppedCanvas;
+                    }
+
                     // Send via POST
-                    canvas.toBlob(async (blob) => {
+                    sending = true;
+                    finalCanvas.toBlob(async (blob) => {
                         if (blob) {
                             try {
                                 const response = await fetch(postUrl, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'image/jpeg' },
                                     body: blob,
-                                    mode: 'cors' // Enable CORS
+                                    mode: 'cors'
                                 });
 
                                 if (!response.ok) {
@@ -191,21 +236,34 @@
                                 }
 
                                 frameCount++;
-                                errorCount = 0; // Reset error count on success
+                                fpsCounter++;
+                                errorCount = 0;
                                 dot.classList.add('connected');
-                                msg.textContent = `LIVE (${frameCount} frames)`;
+
+                                // Calculate real FPS
+                                const now = Date.now();
+                                if (now - fpsTime >= 1000) {
+                                    const realFps = fpsCounter;
+                                    msg.textContent = `LIVE ${realFps} FPS (${Math.round(blob.size / 1024)}KB)`;
+                                    debugInfo.innerHTML = `Target: ${postUrl}<br>Crop: ${useCrop ? 'ON (192x192)' : 'OFF'}<br>Frames: ${frameCount}`;
+                                    fpsCounter = 0;
+                                    fpsTime = now;
+                                }
 
                                 if (frameCount === 1) {
-                                    console.log('[SUCCESS] First frame sent successfully!');
+                                    console.log('[SUCCESS] First frame sent!', blob.size, 'bytes');
                                 }
                             } catch (e) {
                                 errorCount++;
                                 dot.classList.remove('connected');
                                 msg.textContent = `Error: ${e.message}`;
-                                debugInfo.innerHTML = `Target: ${postUrl}<br>Error: ${e.message}<br>Failed: ${errorCount} times`;
+                                debugInfo.innerHTML = `Target: ${postUrl}<br>Error: ${e.message}<br>Failed: ${errorCount}`;
                                 console.error('[ERROR] Fetch failed:', e);
-                                console.error('[ERROR] Target URL was:', postUrl);
+                            } finally {
+                                sending = false;
                             }
+                        } else {
+                            sending = false;
                         }
                     }, 'image/jpeg', quality);
                 }
@@ -220,20 +278,20 @@
             startCamera();
         };
 
-        let hd = false;
+        let lowQuality = true;
         document.getElementById('btnQual').onclick = (e) => {
-            hd = !hd;
-            quality = hd ? 0.8 : 0.5;
-            e.target.textContent = hd ? "SD Quality" : "HD Quality";
-            e.target.style.background = hd ? "rgba(0, 255, 255, 0.4)" : "";
+            lowQuality = !lowQuality;
+            quality = lowQuality ? 0.4 : 0.7;
+            e.target.textContent = lowQuality ? "High Quality (Slow)" : "Low Quality (Fast)";
+            e.target.style.background = lowQuality ? "" : "rgba(255, 0, 0, 0.4)";
         };
 
-        // Init - Start camera and sending loop
+        // Init
         startCamera();
         requestAnimationFrame(sendFrame);
 
-        console.log('[INIT] VRChat Bridge Camera initialized');
-        console.log('[INIT] Target URL:', postUrl);
+        console.log('[INIT] VRChat Bridge Camera (OPTIMIZED)');
+        console.log('[INIT] Resolution: 320x240, Quality:', quality, 'Crop:', useCrop);
     </script>
 </body>
 
