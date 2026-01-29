@@ -4,66 +4,237 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="description" content="VRChat Universal Video Bridge - Phone Camera Link">
-    <title>VRChat Phone Link</title>
-    <link rel="stylesheet" href="style.css">
+    <title>VRChat Bridge Camera</title>
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            color: #fff;
+            font-family: sans-serif;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+        }
+
+        #status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px;
+            border-radius: 10px;
+            font-size: 11px;
+            pointer-events: none;
+            max-width: 90%;
+            line-height: 1.4;
+        }
+
+        .dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #f00;
+            margin-right: 5px;
+        }
+
+        .dot.connected {
+            background: #0f0;
+            box-shadow: 0 0 10px #0f0;
+        }
+
+        #debug-info {
+            font-size: 9px;
+            color: #888;
+            margin-top: 5px;
+            word-break: break-all;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+        }
+
+        button {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 30px;
+            backdrop-filter: blur(5px);
+            font-weight: bold;
+        }
+
+        button:active {
+            background: rgba(255, 255, 255, 0.4);
+        }
+    </style>
 </head>
 
 <body>
-    <!-- Status Bar -->
-    <div id="status-bar">
-        <div class="status-indicator">
-            <span class="dot" id="connection-dot"></span>
-            <span id="status-text">Initializing...</span>
-        </div>
-        <div class="stats">
-            <span id="fps-counter">0 FPS</span>
-        </div>
+    <div id="status">
+        <span class="dot" id="dot"></span> <span id="msg">Connecting...</span>
+        <div id="debug-info"></div>
     </div>
-
-    <!-- Main Video Feed -->
-    <video id="camera" autoplay playsinline muted></video>
-
-    <!-- Hidden Canvas for Frame Capture -->
+    <video id="cam" autoplay playsinline muted></video>
+    <div id="controls">
+        <button id="btnSwitch">📷 Switch Cam</button>
+        <button id="btnQual">HD Quality</button>
+    </div>
     <canvas id="canvas" style="display:none;"></canvas>
 
-    <!-- Control Panel -->
-    <div id="controls">
-        <button id="btn-flip" class="control-btn">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16" />
-            </svg>
-            <span>Flip</span>
-        </button>
+    <script>
+        const video = document.getElementById('cam');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const dot = document.getElementById('dot');
+        const msg = document.getElementById('msg');
+        const debugInfo = document.getElementById('debug-info');
 
-        <button id="btn-quality" class="control-btn">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
-                <line x1="7" y1="2" x2="7" y2="22"></line>
-                <line x1="17" y1="2" x2="17" y2="22"></line>
-                <line x1="2" y1="12" x2="22" y2="12"></line>
-            </svg>
-            <span id="quality-label">HD</span>
-        </button>
-    </div>
+        let streaming = true;
+        let quality = 0.6; // JPEG quality
+        let interval = 33; // ~30 FPS
+        let facingMode = 'user'; // 'user' or 'environment'
+        let postUrl = '/video'; // Will be set based on tunnel parameter
 
-    <!-- Error Display -->
-    <div id="error-message" class="hidden">
-        <div class="error-content">
-            <h2>⚠️ Connection Error</h2>
-            <p id="error-text"></p>
-            <button id="btn-retry" class="retry-btn">Retry Connection</button>
-        </div>
-    </div>
+        // CRITICAL FIX: Parse tunnel URL from query string
+        function getTargetUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const tunnelUrl = urlParams.get('tunnel');
 
-    <!-- Branding -->
-    <div id="branding">
-        <a href="https://github.com/shazamifius/VRchatFACE-HAND-ARM-tracking" target="_blank">
-            VRChat Universal Video Bridge
-        </a>
-    </div>
+            if (tunnelUrl) {
+                // Ensure protocol is present
+                const target = tunnelUrl.startsWith('http') ? tunnelUrl : 'https://' + tunnelUrl;
+                return target + '/video';
+            } else {
+                // Fallback to relative URL (local testing)
+                return '/video';
+            }
+        }
 
-    <script src="app.js"></script>
+        postUrl = getTargetUrl();
+
+        // Display debug info
+        debugInfo.innerHTML = `Target: ${postUrl}<br>Page: ${window.location.href}`;
+        console.log('[DEBUG] Target URL:', postUrl);
+        console.log('[DEBUG] Full page URL:', window.location.href);
+
+        // Start Camera
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: facingMode,
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        frameRate: { ideal: 30 }
+                    },
+                    audio: false
+                });
+                video.srcObject = stream;
+                msg.textContent = "Camera Ready - Sending...";
+                console.log('[INFO] Camera started successfully');
+            } catch (e) {
+                msg.textContent = "Cam Error: " + e.message;
+                console.error('[ERROR] Camera error:', e);
+            }
+        }
+
+        // Send Frame Loop with fetch POST
+        let lastTime = 0;
+        let frameCount = 0;
+        let errorCount = 0;
+
+        async function sendFrame(time) {
+            if (!streaming) return;
+
+            if (time - lastTime >= interval) {
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+
+                    ctx.save();
+                    if (facingMode === 'user') {
+                        ctx.translate(canvas.width, 0);
+                        ctx.scale(-1, 1);
+                    }
+                    ctx.drawImage(video, 0, 0);
+                    ctx.restore();
+
+                    // Send via POST
+                    canvas.toBlob(async (blob) => {
+                        if (blob) {
+                            try {
+                                const response = await fetch(postUrl, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'image/jpeg' },
+                                    body: blob,
+                                    mode: 'cors' // Enable CORS
+                                });
+
+                                if (!response.ok) {
+                                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                                }
+
+                                frameCount++;
+                                errorCount = 0; // Reset error count on success
+                                dot.classList.add('connected');
+                                msg.textContent = `LIVE (${frameCount} frames)`;
+
+                                if (frameCount === 1) {
+                                    console.log('[SUCCESS] First frame sent successfully!');
+                                }
+                            } catch (e) {
+                                errorCount++;
+                                dot.classList.remove('connected');
+                                msg.textContent = `Error: ${e.message}`;
+                                debugInfo.innerHTML = `Target: ${postUrl}<br>Error: ${e.message}<br>Failed: ${errorCount} times`;
+                                console.error('[ERROR] Fetch failed:', e);
+                                console.error('[ERROR] Target URL was:', postUrl);
+                            }
+                        }
+                    }, 'image/jpeg', quality);
+                }
+                lastTime = time;
+            }
+            requestAnimationFrame(sendFrame);
+        }
+
+        // Controls
+        document.getElementById('btnSwitch').onclick = () => {
+            facingMode = facingMode === 'user' ? 'environment' : 'user';
+            startCamera();
+        };
+
+        let hd = false;
+        document.getElementById('btnQual').onclick = (e) => {
+            hd = !hd;
+            quality = hd ? 0.8 : 0.5;
+            e.target.textContent = hd ? "SD Quality" : "HD Quality";
+            e.target.style.background = hd ? "rgba(0, 255, 255, 0.4)" : "";
+        };
+
+        // Init - Start camera and sending loop
+        startCamera();
+        requestAnimationFrame(sendFrame);
+
+        console.log('[INIT] VRChat Bridge Camera initialized');
+        console.log('[INIT] Target URL:', postUrl);
+    </script>
 </body>
 
 </html>
