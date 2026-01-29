@@ -244,9 +244,17 @@
             const dBridgeChin = distance(noseBridge, chin);
             const pitchRatio = dNoseChin / (dBridgeChin + 0.0001);
             // Nominal ratio ~0.65. >0.65 = Up, <0.65 = Down
-            const pitch = (pitchRatio - 0.65) * 150; // Scaling
+            const pitchDeg = (pitchRatio - 0.65) * 150;
 
-            return { pitch: -pitch, yaw: yaw, roll: roll };
+            // Normalize to -1.0 ... 1.0 for VRChat
+            // Assume 45 degrees is "Full" rotation
+            const clamp = (val) => Math.max(-1.0, Math.min(1.0, val));
+
+            return {
+                pitch: clamp(-pitchDeg / 45.0),
+                yaw: clamp(yaw / 45.0),
+                roll: clamp(roll / 45.0)
+            };
         }
 
         function calculateBlendshapes(landmarks) {
@@ -288,6 +296,14 @@
             // HEAD POSE
             const pose = calculateHeadPose(landmarks);
 
+            // TONGUE HEURISTIC (Simulated)
+            // Rule: If Mouth is Pucker > 0.6 AND Jaw Open > 0.2 (Big "O" face / Kiss) -> Trigger Tongue
+            // This is a common workaround since FaceMesh doesn't see tongue.
+            let tongueOut = 0.0;
+            if (mouthPucker > 0.6 && jawOpen > 0.2) {
+                tongueOut = Math.min(1.0, (mouthPucker - 0.6) * 3.0); // Map 0.6..1.0 to 0..1
+            }
+
             return {
                 headPitch: pose.pitch,
                 headYaw: pose.yaw,
@@ -306,7 +322,7 @@
                 mouthFunnel: jawOpen * 0.3,
                 browInnerUp, browOuterUpLeft: browInnerUp * 0.7, browOuterUpRight: browInnerUp * 0.7,
                 browDownLeft: 0, browDownRight: 0,
-                tongueOut: 0
+                tongueOut: tongueOut
             };
         }
 
