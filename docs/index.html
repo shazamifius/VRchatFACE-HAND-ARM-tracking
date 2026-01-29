@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>VRChat Bridge Camera</title>
+    <title>VRChat Face Tracking (MediaPipe)</title>
     <style>
         body {
             margin: 0;
@@ -19,6 +19,13 @@
             font-family: sans-serif;
         }
 
+        #container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            aspect-ratio: 4/3;
+        }
+
         video {
             width: 100%;
             height: 100%;
@@ -26,26 +33,36 @@
             transform: scaleX(-1);
         }
 
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+        }
+
         #status {
             position: absolute;
             top: 10px;
             left: 10px;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 10px;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 12px;
             border-radius: 10px;
             font-size: 11px;
-            pointer-events: none;
+            line-height: 1.6;
             max-width: 90%;
-            line-height: 1.4;
+            z-index: 10;
         }
 
         .dot {
             display: inline-block;
-            width: 8px;
-            height: 8px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
             background: #f00;
             margin-right: 5px;
+            animation: pulse 2s infinite;
         }
 
         .dot.connected {
@@ -53,11 +70,16 @@
             box-shadow: 0 0 10px #0f0;
         }
 
-        #debug-info {
-            font-size: 9px;
-            color: #888;
-            margin-top: 5px;
-            word-break: break-all;
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
         }
 
         #controls {
@@ -66,7 +88,8 @@
             width: 100%;
             display: flex;
             justify-content: center;
-            gap: 20px;
+            gap: 15px;
+            z-index: 10;
         }
 
         button {
@@ -75,201 +98,300 @@
             color: white;
             padding: 10px 20px;
             border-radius: 30px;
-            backdrop-filter: blur(5px);
+            backdrop-filter: blur(10px);
             font-weight: bold;
+            font-size: 13px;
         }
 
         button:active {
             background: rgba(255, 255, 255, 0.4);
         }
-
-        /* Visual feedback for crop area */
-        #crop-overlay {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            border: 2px solid rgba(0, 255, 0, 0.5);
-            pointer-events: none;
-            display: none;
-        }
     </style>
+    <!-- MediaPipe Face Mesh CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
 </head>
 
 <body>
+    <div id="container">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas"></canvas>
+    </div>
+
     <div id="status">
-        <span class="dot" id="dot"></span> <span id="msg">Connecting...</span>
-        <div id="debug-info"></div>
+        <span class="dot" id="dot"></span> <span id="msg">Loading MediaPipe...</span>
+        <div id="debug"></div>
     </div>
-    <video id="cam" autoplay playsinline muted></video>
-    <div id="crop-overlay"></div>
+
     <div id="controls">
-        <button id="btnSwitch">📷 Switch Cam</button>
-        <button id="btnQual">Low Quality (Fast)</button>
+        <button id="btnSwitch">📷 Flip</button>
+        <button id="btnLandmarks">Hide Landmarks</button>
     </div>
-    <canvas id="canvas" style="display:none;"></canvas>
 
     <script>
-        const video = document.getElementById('cam');
+        const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const dot = document.getElementById('dot');
         const msg = document.getElementById('msg');
-        const debugInfo = document.getElementById('debug-info');
-        const cropOverlay = document.getElementById('crop-overlay');
+        const debug = document.getElementById('debug');
 
-        let streaming = true;
-        let quality = 0.4; // OPTIMIZED: Lower quality for faster upload
-        let interval = 100; // OPTIMIZED: 10 FPS max (realistic for upload)
+        let postUrl = '/tracking';
         let facingMode = 'user';
-        let postUrl = '/video';
-        let useCrop = true; // OPTIMIZED: Always use crop for face tracking
+        let showLandmarks = true;
+        let frameCount = 0;
+        let fpsCounter = 0;
+        let fpsTime = Date.now();
+        let connected = false;
 
-        // CRITICAL FIX: Parse tunnel URL from query string
-        function getTargetUrl() {
-            const urlParams = new URLSearchParams(window.location.search);
-            const tunnelUrl = urlParams.get('tunnel');
+        // Parse tunnel URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const tunnelUrl = urlParams.get('tunnel');
+        if (tunnelUrl) {
+            const target = tunnelUrl.startsWith('http') ? tunnelUrl : 'https://' + tunnelUrl;
+            postUrl = target + '/tracking';
+        }
 
-            if (tunnelUrl) {
-                const target = tunnelUrl.startsWith('http') ? tunnelUrl : 'https://' + tunnelUrl;
-                return target + '/video';
-            } else {
-                return '/video';
+        debug.innerHTML = `Target: ${postUrl}<br>Mode: MediaPipe Face Mesh`;
+
+        // Detect low-end device
+        const isLowEnd = navigator.hardwareConcurrency < 4 || /Android [4-7]/.test(navigator.userAgent);
+
+        // Initialize MediaPipe Face Mesh
+        const faceMesh = new FaceMesh({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
+
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: !isLowEnd, // Disable iris on old phones
+            minDetectionConfidence: isLowEnd ? 0.3 : 0.5,
+            minTrackingConfidence: isLowEnd ? 0.3 : 0.5
+        });
+
+        console.log('[MediaPipe] Config:', isLowEnd ? 'Low-end mode' : 'High quality mode');
+
+        // Helper: Distance between two points
+        function distance(p1, p2) {
+            const dx = p1.x - p2.x;
+            const dy = p1.y - p2.y;
+            const dz = (p1.z || 0) - (p2.z || 0);
+            return Math.sqrt(dx * dx + dy * dy + dz * dz);
+        }
+
+        // Calculate Eye Aspect Ratio (EAR)
+        function calculateEAR(eye) {
+            // eye = [p1, p2, p3, p4, p5, p6]
+            // Vertical distances
+            const v1 = distance(eye[1], eye[5]);
+            const v2 = distance(eye[2], eye[4]);
+            // Horizontal distance
+            const h = distance(eye[0], eye[3]);
+            return h > 0.001 ? (v1 + v2) / (2.0 * h) : 0;
+        }
+
+        // Calculate ARKit Blendshapes from MediaPipe landmarks
+        function calculateBlendshapes(landmarks) {
+            if (!landmarks || landmarks.length < 468) return null;
+
+            // MediaPipe landmark indices (based on the 468-point mesh)
+            // Eyes
+            const leftEye = [33, 160, 158, 133, 153, 144].map(i => landmarks[i]);
+            const rightEye = [362, 385, 387, 263, 373, 380].map(i => landmarks[i]);
+
+            const leftEAR = calculateEAR(leftEye);
+            const rightEAR = calculateEAR(rightEye);
+
+            // Blink detection (inverse of EAR)
+            const eyeBlinkLeft = Math.max(0, Math.min(1, 1 - leftEAR * 2.5));
+            const eyeBlinkRight = Math.max(0, Math.min(1, 1 - rightEAR * 2.5));
+
+            // Mouth
+            const mouthLeft = landmarks[61];
+            const mouthRight = landmarks[291];
+            const mouthTop = landmarks[13];
+            const mouthBottom = landmarks[14];
+            const mouthUpperInner = landmarks[13];
+            const mouthLowerInner = landmarks[14];
+
+            const mouthHeight = distance(mouthTop, mouthBottom);
+            const mouthWidth = distance(mouthLeft, mouthRight);
+
+            // Estimate face height for normalization
+            const noseTip = landmarks[1];
+            const chin = landmarks[199];
+            const faceHeight = distance(noseTip, chin);
+
+            const jawOpen = faceHeight > 0.001 ? Math.min(1, mouthHeight / (faceHeight * 0.25)) : 0;
+
+            // Smile detection (corners elevation)
+            const mouthCenter = landmarks[13];
+            const smileLeft = Math.max(0, (mouthCenter.y - mouthLeft.y) / (faceHeight * 0.1));
+            const smileRight = Math.max(0, (mouthCenter.y - mouthRight.y) / (faceHeight * 0.1));
+
+            // Pucker (mouth width reduction)
+            const neutralMouthWidth = faceHeight * 0.3;
+            const mouthPucker = neutralMouthWidth > 0 ? Math.max(0, 1 - mouthWidth / neutralMouthWidth) : 0;
+
+            // Eyebrows
+            const leftBrowInner = landmarks[55];
+            const rightBrowInner = landmarks[285];
+            const noseBridge = landmarks[6];
+
+            const leftBrowHeight = noseBridge.y - leftBrowInner.y;
+            const rightBrowHeight = noseBridge.y - rightBrowInner.y;
+
+            const browInnerUp = Math.max(0, Math.min(1, (leftBrowHeight + rightBrowHeight) / (faceHeight * 0.15)));
+
+            // Construct ARKit-compatible blendshapes
+            return {
+                // Eyes
+                eyeBlinkLeft: eyeBlinkLeft,
+                eyeBlinkRight: eyeBlinkRight,
+                eyeSquintLeft: eyeBlinkLeft * 0.5, // Approximation
+                eyeSquintRight: eyeBlinkRight * 0.5,
+                eyeWideLeft: Math.max(0, leftEAR - 0.15) * 2,
+                eyeWideRight: Math.max(0, rightEAR - 0.15) * 2,
+
+                // Jaw
+                jawOpen: jawOpen,
+                jawForward: 0,
+                jawLeft: 0,
+                jawRight: 0,
+
+                // Mouth
+                mouthSmileLeft: Math.min(1, smileLeft),
+                mouthSmileRight: Math.min(1, smileRight),
+                mouthFrownLeft: 0,
+                mouthFrownRight: 0,
+                mouthPucker: Math.min(1, mouthPucker),
+                mouthFunnel: jawOpen * 0.3, // Approximation
+
+                // Brows
+                browInnerUp: browInnerUp,
+                browOuterUpLeft: browInnerUp * 0.7,
+                browOuterUpRight: browInnerUp * 0.7,
+                browDownLeft: 0,
+                browDownRight: 0
+            };
+        }
+
+        // MediaPipe results callback
+        faceMesh.onResults((results) => {
+            // Clear canvas
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                const landmarks = results.multiFaceLandmarks[0];
+
+                // Draw landmarks
+                if (showLandmarks) {
+                    ctx.save();
+                    ctx.scale(-1, 1);
+                    ctx.translate(-canvas.width, 0);
+
+                    // Draw mesh
+                    ctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
+                    for (const landmark of landmarks) {
+                        ctx.beginPath();
+                        ctx.arc(landmark.x * canvas.width, landmark.y * canvas.height, 1, 0, 2 * Math.PI);
+                        ctx.fill();
+                    }
+
+                    ctx.restore();
+                }
+
+                // Calculate blendshapes
+                const blendshapes = calculateBlendshapes(landmarks);
+
+                if (blendshapes) {
+                    // Send to PC
+                    sendBlendshapes(blendshapes);
+                }
+            }
+        });
+
+        // Send blendshapes via JSON POST
+        let sending = false;
+        async function sendBlendshapes(blendshapes) {
+            if (sending) return;
+
+            sending = true;
+            try {
+                const response = await fetch(postUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(blendshapes),
+                    mode: 'cors'
+                });
+
+                if (response.ok) {
+                    frameCount++;
+                    fpsCounter++;
+                    connected = true;
+                    dot.classList.add('connected');
+
+                    // Calculate FPS
+                    const now = Date.now();
+                    if (now - fpsTime >= 1000) {
+                        const fps = fpsCounter;
+                        msg.textContent = `LIVE ${fps} FPS`;
+                        debug.innerHTML = `Target: ${postUrl}<br>Frames: ${frameCount}<br>Quality: ${isLowEnd ? 'Lite' : 'High'}`;
+                        fpsCounter = 0;
+                        fpsTime = now;
+                    }
+                } else {
+                    connected = false;
+                    dot.classList.remove('connected');
+                    msg.textContent = `Error: HTTP ${response.status}`;
+                }
+            } catch (e) {
+                connected = false;
+                dot.classList.remove('connected');
+                msg.textContent = `Error: ${e.message}`;
+                console.error('[ERROR]', e);
+            } finally {
+                sending = false;
             }
         }
 
-        postUrl = getTargetUrl();
-
-        // Display debug info
-        debugInfo.innerHTML = `Target: ${postUrl}<br>Crop: ${useCrop ? 'ON (192x192)' : 'OFF'}`;
-        console.log('[DEBUG] Target URL:', postUrl);
-
-        // Start Camera - OPTIMIZED RESOLUTION
+        // Start camera
         async function startCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: {
                         facingMode: facingMode,
-                        width: { ideal: 320 },  // OPTIMIZED: Reduced from 640
-                        height: { ideal: 240 }, // OPTIMIZED: Reduced from 480
-                        frameRate: { ideal: 15 } // OPTIMIZED: Reduced from 30
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        frameRate: { ideal: 30 }
                     },
                     audio: false
                 });
-                video.srcObject = stream;
-                msg.textContent = "Camera Ready - Sending...";
-                console.log('[INFO] Camera started (320x240@15fps)');
 
-                // Update crop overlay size
-                video.onloadedmetadata = () => {
-                    const cropSize = Math.min(video.videoWidth, video.videoHeight);
-                    cropOverlay.style.width = cropSize + 'px';
-                    cropOverlay.style.height = cropSize + 'px';
+                video.srcObject = stream;
+                video.onloadeddata = () => {
+                    console.log('[Camera] Resolution:', video.videoWidth, 'x', video.videoHeight);
+
+                    // Start MediaPipe processing
+                    const camera = new Camera(video, {
+                        onFrame: async () => {
+                            await faceMesh.send({ image: video });
+                        },
+                        width: 640,
+                        height: 480
+                    });
+                    camera.start();
+
+                    msg.textContent = 'Tracking started...';
                 };
             } catch (e) {
-                msg.textContent = "Cam Error: " + e.message;
-                console.error('[ERROR] Camera error:', e);
+                msg.textContent = `Camera Error: ${e.message}`;
+                console.error('[ERROR] Camera:', e);
             }
-        }
-
-        // Send Frame Loop with CROP optimization
-        let lastTime = 0;
-        let frameCount = 0;
-        let errorCount = 0;
-        let sending = false; // Prevent overlapping sends
-        let fpsCounter = 0;
-        let fpsTime = Date.now();
-
-        async function sendFrame(time) {
-            if (!streaming || sending) {
-                requestAnimationFrame(sendFrame);
-                return;
-            }
-
-            if (time - lastTime >= interval) {
-                if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                    // Draw full video to canvas
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-
-                    ctx.save();
-                    if (facingMode === 'user') {
-                        ctx.translate(canvas.width, 0);
-                        ctx.scale(-1, 1);
-                    }
-                    ctx.drawImage(video, 0, 0);
-                    ctx.restore();
-
-                    // OPTIMIZATION: Crop to center 192x192 (face region)
-                    let finalCanvas = canvas;
-
-                    if (useCrop) {
-                        const cropSize = 192;
-                        const cropX = (canvas.width - cropSize) / 2;
-                        const cropY = (canvas.height - cropSize) / 2;
-
-                        const croppedCanvas = document.createElement('canvas');
-                        croppedCanvas.width = cropSize;
-                        croppedCanvas.height = cropSize;
-                        croppedCanvas.getContext('2d').drawImage(
-                            canvas, cropX, cropY, cropSize, cropSize,
-                            0, 0, cropSize, cropSize
-                        );
-
-                        finalCanvas = croppedCanvas;
-                    }
-
-                    // Send via POST
-                    sending = true;
-                    finalCanvas.toBlob(async (blob) => {
-                        if (blob) {
-                            try {
-                                const response = await fetch(postUrl, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'image/jpeg' },
-                                    body: blob,
-                                    mode: 'cors'
-                                });
-
-                                if (!response.ok) {
-                                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                                }
-
-                                frameCount++;
-                                fpsCounter++;
-                                errorCount = 0;
-                                dot.classList.add('connected');
-
-                                // Calculate real FPS
-                                const now = Date.now();
-                                if (now - fpsTime >= 1000) {
-                                    const realFps = fpsCounter;
-                                    msg.textContent = `LIVE ${realFps} FPS (${Math.round(blob.size / 1024)}KB)`;
-                                    debugInfo.innerHTML = `Target: ${postUrl}<br>Crop: ${useCrop ? 'ON (192x192)' : 'OFF'}<br>Frames: ${frameCount}`;
-                                    fpsCounter = 0;
-                                    fpsTime = now;
-                                }
-
-                                if (frameCount === 1) {
-                                    console.log('[SUCCESS] First frame sent!', blob.size, 'bytes');
-                                }
-                            } catch (e) {
-                                errorCount++;
-                                dot.classList.remove('connected');
-                                msg.textContent = `Error: ${e.message}`;
-                                debugInfo.innerHTML = `Target: ${postUrl}<br>Error: ${e.message}<br>Failed: ${errorCount}`;
-                                console.error('[ERROR] Fetch failed:', e);
-                            } finally {
-                                sending = false;
-                            }
-                        } else {
-                            sending = false;
-                        }
-                    }, 'image/jpeg', quality);
-                }
-                lastTime = time;
-            }
-            requestAnimationFrame(sendFrame);
         }
 
         // Controls
@@ -278,20 +400,17 @@
             startCamera();
         };
 
-        let lowQuality = true;
-        document.getElementById('btnQual').onclick = (e) => {
-            lowQuality = !lowQuality;
-            quality = lowQuality ? 0.4 : 0.7;
-            e.target.textContent = lowQuality ? "High Quality (Slow)" : "Low Quality (Fast)";
-            e.target.style.background = lowQuality ? "" : "rgba(255, 0, 0, 0.4)";
+        document.getElementById('btnLandmarks').onclick = (e) => {
+            showLandmarks = !showLandmarks;
+            e.target.textContent = showLandmarks ? 'Hide Landmarks' : 'Show Landmarks';
         };
 
         // Init
-        startCamera();
-        requestAnimationFrame(sendFrame);
+        console.log('[INIT] VRChat Face Tracking (MediaPipe Mode)');
+        console.log('[INIT] Target:', postUrl);
+        console.log('[INIT] Performance mode:', isLowEnd ? 'Lite' : 'High');
 
-        console.log('[INIT] VRChat Bridge Camera (OPTIMIZED)');
-        console.log('[INIT] Resolution: 320x240, Quality:', quality, 'Crop:', useCrop);
+        startCamera();
     </script>
 </body>
 
