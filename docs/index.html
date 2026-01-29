@@ -288,21 +288,15 @@
             if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
                 const landmarks = results.multiFaceLandmarks[0];
 
-                // Draw landmarks
+                // Draw landmarks (NO FLIP - landmarks already match mirrored video)
                 if (showLandmarks) {
-                    ctx.save();
-                    ctx.scale(-1, 1);
-                    ctx.translate(-canvas.width, 0);
-
-                    // Draw mesh
+                    // Draw mesh without flipping since video is already mirrored
                     ctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
                     for (const landmark of landmarks) {
                         ctx.beginPath();
                         ctx.arc(landmark.x * canvas.width, landmark.y * canvas.height, 1, 0, 2 * Math.PI);
                         ctx.fill();
                     }
-
-                    ctx.restore();
                 }
 
                 // Calculate blendshapes
@@ -315,12 +309,8 @@
             }
         });
 
-        // Send blendshapes via JSON POST
-        let sending = false;
+        // Send blendshapes via JSON POST (removed throttling for higher FPS)
         async function sendBlendshapes(blendshapes) {
-            if (sending) return;
-
-            sending = true;
             try {
                 const response = await fetch(postUrl, {
                     method: 'POST',
@@ -354,8 +344,6 @@
                 dot.classList.remove('connected');
                 msg.textContent = `Error: ${e.message}`;
                 console.error('[ERROR]', e);
-            } finally {
-                sending = false;
             }
         }
 
