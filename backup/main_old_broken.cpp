@@ -24,8 +24,10 @@
 #include "core/AutoConfig.hpp"
 #include "core/CameraState.hpp"
 #include "network/OSCClient.hpp"
+#include "network/TrackingReceiver.hpp"
 #include "network/VMCProtocol.hpp"
 #include "ui/MainWindow.hpp"
+
 
 // OpenCV
 #include <opencv2/opencv.hpp>
@@ -50,7 +52,7 @@ struct SharedState {
   bool face_tracking_active = false;
 
   // Debug / Test State
-  // UI::BodyState body_debug;  // COMMENTED - type doesn't exist
+  UI::BodyState body_debug;
 
   // Stats
   long long inference_time_us = 0;
@@ -58,14 +60,13 @@ struct SharedState {
   bool system_running = true;
 
   // Camera Control
-  // Camera Control & Network Info
-  int camera_index = 0;
   int pending_camera_index = -1;
   bool camera_available[5] = {false, false, false, false,
                               false}; // Status for Camera 0-4
+
+  // Network Info
   std::string server_ip = "127.0.0.1";
   int server_port = 8080;
-  std::string public_url = ""; // NEW: Cloudflare Tunnel URL
 
   // Cloudflare Tunnel Info (updated asynchronously)
   std::string tunnel_url = "";
@@ -210,24 +211,6 @@ void VisionLoop() {
   Biomech::SkeletonSolver skeleton_solver;
   Network::OSCClient osc_client("127.0.0.1", 9000);
 
-  // --- Start Cloudflare Tunnel ---
-  static Network::CloudflareTunnel tunnel; // static to persist
-  std::cout << "[Network] Starting Cloudflare Tunnel..." << std::endl;
-  std::thread tunnel_thread([]() {
-    std::this_thread::sleep_for(std::chrono::seconds(2)); // Wait for server
-    if (tunnel.Start(8080)) {
-      std::cout << "[Network] Tunnel URL: " << tunnel.GetPublicURL()
-                << std::endl;
-      // Update valid URL shared state
-      std::lock_guard<std::mutex> lock(g_appState.mutex);
-      g_appState.public_url = tunnel.GetPublicURL();
-    }
-  });
-  tunnel_thread.detach();
-
-  // Create & Inject TrackingReceiver
-  Network::TrackingReceiver tracking_receiver;
-
   // --- Start Web Server ---
   Network::WebServer web_server(8080);
   std::cout << "[Network] Starting Web Server on port 8080..." << std::endl;
@@ -235,8 +218,10 @@ void VisionLoop() {
 
   // Inject VideoReceiver to handle incoming phone camera frames
   web_server.SetVideoReceiver(&g_videoReceiver);
-  web_server.SetTrackingReceiver(
-      &tracking_receiver); // Inject Tracking Receiver
+
+  // Inject TrackingReceiver to handle incoming phone blendshapes (CRITICAL FIX)
+  static Network::TrackingReceiver tracking_receiver;
+  web_server.SetTrackingReceiver(&tracking_receiver);
 
   std::string local_ip = web_server.GetLocalIP();
   std::cout << "[Network] Local IP: " << local_ip << std::endl;
@@ -267,110 +252,7 @@ void VisionLoop() {
         break;
     }
 
-    // --- TRACKING RECEIVER LOGIC (Phone Data) ---
-    // This fixes the missing head rotation!
-    Biomech::ARKitBlendshapes phone_shapes;
-    if (tracking_receiver.GetLatestBlendshapes(phone_shapes)) {
-      // We received data from phone!
-
-      // 1. Calculate Head Rotation from Face Geometry if possible
-      // (Using simplified logic for now as we don't have raw landmarks here
-      // yet,
-      //  but we can use the 'head pose' if phone sends it?
-      //  Actually, phone sends blendshapes. Let's check if we can get rotation.
-      //  If not, we just forward blendshapes)
-
-      // Send Blendshapes via OSC
-      std::vector<char> bundle;
-      // Add blendshapes to bundle... (simplified for brevity, assume OSCClient
-      // handles it or we call SendBundle) Actually, we need to iterate map and
-      // osc_client.SendFloat
-
-      // CRITICAL: We need to send Head Rotation.
-      // If the phone tracking provides head rotation parameters, use them.
-      // Standard ARKit includes: HeadYaw, HeadPitch, HeadRoll
-
-      osc_client.SendFloat("/avatar/parameters/HeadPitch",
-                           phone_shapes.headPitch);
-      osc_client.SendFloat("/avatar/parameters/HeadYaw", phone_shapes.headYaw);
-      osc_client.SendFloat("/avatar/parameters/HeadRoll",
-                           phone_shapes.headRoll);
-
-      // Send all other blendshapes (Explicitly mapping important ones as we
-      // don't have reflection) Eyes
-      osc_client.SendFloat("/avatar/parameters/EyeBlinkLeft",
-                           phone_shapes.eyeBlinkLeft);
-      osc_client.SendFloat("/avatar/parameters/EyeBlinkRight",
-                           phone_shapes.eyeBlinkRight);
-      osc_client.SendFloat("/avatar/parameters/EyeLookUpLeft",
-                           phone_shapes.eyeLookUpLeft);
-      osc_client.SendFloat("/avatar/parameters/EyeLookUpRight",
-                           phone_shapes.eyeLookUpRight);
-      osc_client.SendFloat("/avatar/parameters/EyeLookDownLeft",
-                           phone_shapes.eyeLookDownLeft);
-      osc_client.SendFloat("/avatar/parameters/EyeLookDownRight",
-                           phone_shapes.eyeLookDownRight);
-      osc_client.SendFloat("/avatar/parameters/EyeLookInLeft",
-                           phone_shapes.eyeLookInLeft);
-      osc_client.SendFloat("/avatar/parameters/EyeLookInRight",
-                           phone_shapes.eyeLookInRight);
-      osc_client.SendFloat("/avatar/parameters/EyeLookOutLeft",
-                           phone_shapes.eyeLookOutLeft);
-      osc_client.SendFloat("/avatar/parameters/EyeLookOutRight",
-                           phone_shapes.eyeLookOutRight);
-
-      // Jaw
-      osc_client.SendFloat("/avatar/parameters/JawOpen", phone_shapes.jawOpen);
-      osc_client.SendFloat("/avatar/parameters/JawForward",
-                           phone_shapes.jawForward);
-      osc_client.SendFloat("/avatar/parameters/JawLeft", phone_shapes.jawLeft);
-      osc_client.SendFloat("/avatar/parameters/JawRight",
-                           phone_shapes.jawRight);
-
-      // Mouth
-      osc_client.SendFloat("/avatar/parameters/MouthClose",
-                           phone_shapes.mouthClose);
-      osc_client.SendFloat("/avatar/parameters/MouthFunnel",
-                           phone_shapes.mouthFunnel);
-      osc_client.SendFloat("/avatar/parameters/MouthPucker",
-                           phone_shapes.mouthPucker);
-      osc_client.SendFloat("/avatar/parameters/MouthLeft",
-                           phone_shapes.mouthLeft);
-      osc_client.SendFloat("/avatar/parameters/MouthRight",
-                           phone_shapes.mouthRight);
-      osc_client.SendFloat("/avatar/parameters/MouthSmileLeft",
-                           phone_shapes.mouthSmileLeft);
-      osc_client.SendFloat("/avatar/parameters/MouthSmileRight",
-                           phone_shapes.mouthSmileRight);
-      osc_client.SendFloat("/avatar/parameters/MouthFrownLeft",
-                           phone_shapes.mouthFrownLeft);
-      osc_client.SendFloat("/avatar/parameters/MouthFrownRight",
-                           phone_shapes.mouthFrownRight);
-
-      // Brows
-      osc_client.SendFloat("/avatar/parameters/BrowDownLeft",
-                           phone_shapes.browDownLeft);
-      osc_client.SendFloat("/avatar/parameters/BrowDownRight",
-                           phone_shapes.browDownRight);
-      osc_client.SendFloat("/avatar/parameters/BrowInnerUp",
-                           phone_shapes.browInnerUp);
-      osc_client.SendFloat("/avatar/parameters/BrowOuterUpLeft",
-                           phone_shapes.browOuterUpLeft);
-      osc_client.SendFloat("/avatar/parameters/BrowOuterUpRight",
-                           phone_shapes.browOuterUpRight);
-
-      // Tongue
-      osc_client.SendFloat("/avatar/parameters/TongueOut",
-                           phone_shapes.tongueOut);
-
-      // Update Shared State for Debug UI
-      {
-        std::lock_guard<std::mutex> lock(g_appState.mutex);
-        g_appState.blendshapes = phone_shapes;
-        g_appState.face_tracking_active = true;
-      }
-    }
-
+    // Check for Camera Switch logic (Local vs Network)
     // If Network has frame, use it? Or manual switch?
     // Let's prioritize Network if connected.
 
@@ -504,7 +386,45 @@ void VisionLoop() {
       auto skeleton_pose =
           skeleton_solver.Solve(pose, left_hand_result, right_hand_result);
 
-      // 5. Send OSC
+      // 5. Send OSC - PHONE BLENDSHAPES (CRITICAL FIX)
+      // Read blendshapes from phone and forward to VRChat
+      Biomech::ARKitBlendshapes phone_blendshapes;
+      if (tracking_receiver.GetLatestBlendshapes(phone_blendshapes)) {
+        // Send blendshapes via OSC to VRChat
+        const float BOOST = 1.5f; // Amplify for better visibility
+
+        // Debug log every 60 frames
+        if (frame_count % 60 == 0) {
+          std::cout << "[OSC] Sending phone blendshapes: jawOpen="
+                    << phone_blendshapes.jawOpen
+                    << " eyeBlinkL=" << phone_blendshapes.eyeBlinkLeft
+                    << std::endl;
+        }
+
+        // Eyes
+        osc_client.SendFloat("/avatar/parameters/EyeBlinkLeft",
+                        phone_blendshapes.eyeBlinkLeft * BOOST);
+        osc_client.SendFloat("/avatar/parameters/EyeBlinkRight",
+                        phone_blendshapes.eyeBlinkRight * BOOST);
+        osc_client.SendFloat("/avatar/parameters/EyeWideLeft",
+                        phone_blendshapes.eyeWideLeft * BOOST);
+        osc_client.SendFloat("/avatar/parameters/EyeWideRight",
+                        phone_blendshapes.eyeWideRight * BOOST);
+
+        // Jaw/Mouth
+        osc_client.SendFloat("/avatar/parameters/JawOpen",
+                        phone_blendshapes.jawOpen * BOOST);
+        osc_client.SendFloat("/avatar/parameters/MouthSmileLeft",
+                        phone_blendshapes.mouthSmileLeft * BOOST);
+        osc_client.SendFloat("/avatar/parameters/MouthSmileRight",
+                        phone_blendshapes.mouthSmileRight * BOOST);
+
+        // Brows
+        osc_client.SendFloat("/avatar/parameters/BrowInnerUp",
+                        phone_blendshapes.browInnerUp * BOOST);
+      }
+
+      // 6. Send OSC - Skeleton (existing code)
       for (const auto &bone : skeleton_pose) {
         std::string boneName = BoneToString(bone.first);
         if (!boneName.empty()) {
@@ -519,7 +439,7 @@ void VisionLoop() {
             unityPos.z = 0;
           }
 
-          osc_client.Send(
+          osc_client.SendFloat(
               Network::VMCProtocol::PackBonePos(boneName, unityPos, unityRot));
         }
       }
@@ -633,9 +553,9 @@ struct OffscreenBuffer {
   }
 };
 
-// RenderSkeleton - Simplified without BodyState
 void RenderSkeleton(const OffscreenBuffer &buffer, const Core::Vector3 &pos,
-                    const Core::Quaternion &rot) {
+                    const Core::Quaternion &rot,
+                    const UI::BodyState &debug_appState) {
   if (buffer.fbo == 0)
     return;
 
@@ -730,8 +650,8 @@ void RenderSkeleton(const OffscreenBuffer &buffer, const Core::Vector3 &pos,
   // EYES
   float eye_y = 0.03f;
   float eye_x = 0.05f;
-  float blink_l = 0.0f; // debug_appState doesn't exist
-  float blink_r = 0.0f; // debug_appState doesn't exist
+  float blink_l = debug_appState.test_mode ? debug_appState.blink_l : 0.0f;
+  float blink_r = debug_appState.test_mode ? debug_appState.blink_r : 0.0f;
 
   // Left Eye
   glColor3f(1.0f, 0.2f, 0.6f); // Pink
@@ -762,7 +682,7 @@ void RenderSkeleton(const OffscreenBuffer &buffer, const Core::Vector3 &pos,
   }
 
   // MOUTH (Jaw Open)
-  float jaw = 0.0f;                       // debug_appState doesn't exist
+  float jaw = debug_appState.test_mode ? debug_appState.jaw_open : 0.0f;
   float mouth_y = -0.05f - (jaw * 0.05f); // Move down
   glColor3f(1.0f, 1.0f, 1.0f);
   glBegin(GL_LINE_LOOP);
@@ -773,7 +693,7 @@ void RenderSkeleton(const OffscreenBuffer &buffer, const Core::Vector3 &pos,
   glEnd();
 
   // TONGUE
-  float tongue = 0.0f; // debug_appState doesn't exist
+  float tongue = debug_appState.test_mode ? debug_appState.tongue_out : 0.0f;
   if (tongue > 0.1f) {
     glColor3f(1.0f, 0.4f, 0.4f); // Reddish
     glBegin(GL_LINES);
@@ -803,8 +723,13 @@ void RenderSkeleton(const OffscreenBuffer &buffer, const Core::Vector3 &pos,
 
   // Arms Logic
   float time = (float)glfwGetTime();
-  float t_pose = 1.0f; // debug_appState doesn't exist
-  float wave = 0.0f;   // debug_appState doesn't exist
+  float t_pose = debug_appState.test_mode
+                     ? debug_appState.t_pose_blend
+                     : 1.0f; // Default T-Pose if not test mode? No, assume
+                             // simple T-Pose base.
+  float wave = debug_appState.test_mode && debug_appState.wave_anim
+                   ? (sin(time * 5.0f) * 0.5f + 0.5f)
+                   : 0.0f;
 
   // Left Arm
   // Shoulder (-0.2, 0, 0)
@@ -843,8 +768,8 @@ void RenderSkeleton(const OffscreenBuffer &buffer, const Core::Vector3 &pos,
 
   // HANDS Curls
   // Draw sphere at hand pos, color by curl
-  float l_curl = 0.0f; // debug_appState doesn't exist
-  float r_curl = 0.0f; // debug_appState doesn't exist
+  float l_curl = debug_appState.test_mode ? debug_appState.hand_l_curl : 0.0f;
+  float r_curl = debug_appState.test_mode ? debug_appState.hand_r_curl : 0.0f;
 
   // L Hand
   glPointSize(
@@ -990,7 +915,7 @@ int main() {
   GLuint camera_tex_id = 0;
   Core::Vector3 current_head_pos = {0, 0, 0};
   Core::Quaternion current_head_rot = {1, 0, 0, 0};
-  // UI::BodyState current_body_debug;  // COMMENTED - type doesn't exist
+  UI::BodyState current_body_debug;
 
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
@@ -1018,14 +943,12 @@ int main() {
       // implemented that logic) and 'written' by UI. So we can just take the
       // UI's version as authoritative for Test Mode. Let's just keep
       // 'current_body_debug' persistent in main, and update g_appState with it.
-      // g_appState.body_debug = current_body_debug;  // COMMENTED - doesn't
-      // exist
+      g_appState.body_debug = current_body_debug;
     }
 
-    // Render 3D Avatar to FBO
-    RenderSkeleton(avatar_buffer, current_head_pos,
-                   current_head_rot); // COMMENTED - current_body_debug
-    //                doesn't exist
+    // Render 3D Avatar to FBO (using the debug state)
+    RenderSkeleton(avatar_buffer, current_head_pos, current_head_rot,
+                   current_body_debug);
 
     // Render ImGui
     ImGui_ImplOpenGL3_NewFrame();
@@ -1083,47 +1006,14 @@ int main() {
       }
     }
 
-    // --- Prepare Data for New UI Interface ---
-    // Variables needed by the updated MainWindow::Render
-    Biomech::CalibrationCommand calib_cmd = Biomech::CalibrationCommand::NONE;
-    std::string calib_feedback = "";
-    int calib_state = 0;
-    int calib_samples = 0;
-    int calib_total = 0;
-    double calib_countdown = 0.0;
-    bool is_loading = false;
-    bool trigger_rescan = false;
-    bool phone_connected = false;
-    std::string phone_info = "Waiting...";
+    main_window.Render(camera_tex_id, avatar_buffer.texture, display_w,
+                       display_h, current_body_debug, real_fps, latency_val,
+                       requested_cam, cam_status);
 
-    // Call Render with Correct Signature matching MainWindow.hpp
-    main_window.Render(camera_tex_id, display_w, display_h, real_fps,
-                       latency_val, requested_cam, cam_status, calib_cmd,
-                       calib_feedback, calib_state, calib_samples, calib_total,
-                       calib_countdown, is_loading, trigger_rescan,
-                       phone_connected, phone_info);
     // Check if UI requested camera change
     if (requested_cam != -1) {
       std::lock_guard<std::mutex> lock(g_appState.mutex);
       g_appState.pending_camera_index = requested_cam;
-    }
-
-    // Check for QR Code Update (Cloudflare Tunnel)
-    static std::string last_public_url = "";
-    std::string current_public_url = "";
-    {
-      std::lock_guard<std::mutex> lock(g_appState.mutex);
-      current_public_url = g_appState.public_url;
-    }
-    if (!current_public_url.empty() && current_public_url != last_public_url) {
-      last_public_url = current_public_url;
-      // Construct full URL with params to open phone page directly
-      // Base URL is GitHub Pages
-      std::string base_gh_pages =
-          "https://shazamifius.github.io/VRchatFACE-HAND-ARM-tracking";
-      std::string final_qr_url =
-          base_gh_pages + "?tunnel=" + current_public_url;
-      main_window.UpdateQRCode(final_qr_url);
     }
 
     ImGui::Render();
@@ -1159,3 +1049,4 @@ int main() {
 
   return 0;
 }
+

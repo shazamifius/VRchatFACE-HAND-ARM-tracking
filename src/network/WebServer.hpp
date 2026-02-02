@@ -20,10 +20,13 @@
 #include <iphlpapi.h>
 #pragma comment(lib, "iphlpapi.lib")
 
+#include "TrackingReceiver.hpp"
+
 namespace Network {
 
 class VideoReceiver;
-class TrackingReceiver;
+// class TrackingReceiver; // Remove forward declaration if included, or keep if
+// useful but include is mandatory for usage
 
 class WebServer {
 public:

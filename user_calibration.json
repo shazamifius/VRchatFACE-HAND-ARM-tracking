@@ -1,0 +1,12 @@
+{
+    "brow_y_down_max": 0.0,
+    "brow_y_neutral": 8.059318542480469,
+    "brow_y_up_max": 0.0,
+    "ear_closed": 0.15000000596046448,
+    "ear_open": 0.30000001192092896,
+    "ear_wide": 0.42187976837158203,
+    "is_initialized": true,
+    "mouth_width_neutral": 49.7017822265625,
+    "mouth_width_smile_max": 56.636627197265625,
+    "smile_elevation_max": 7.212860107421875
+}
