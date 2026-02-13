@@ -1,0 +1,37 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup Vcpkg
+      uses: lukka/run-vcpkg@v10
+      with:
+        vcpkgJsonGlob: 'vcpkg.json'
+
+    - name: Configure CMake
+      uses: lukka/run-cmake@v10
+      with:
+        configurePreset: 'ninja-multi-vcpkg'
+        # Or standard cmake commands if presets are not used. 
+        # But run-cmake + vcpkg integration is often smoother with presets or just standard args if managed well.
+        # Let's use simple cmake commands for clarity if user doesn't have CMakePresets.json
+      # Actually, let's stick to standard cmake commands for simplicity and control.
+      
+    - name: Run CMake (Configure)
+      run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Test
+      run: ctest --test-dir build -C Release --output-on-failure

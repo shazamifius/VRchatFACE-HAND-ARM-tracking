@@ -1,0 +1,49 @@
+[package]
+name = "vrchat-bridge-hub"
+version = "0.1.0"
+description = "Open Source VRChat Face/Hand/Body Tracking Bridge"
+authors = ["shazamifius"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "hub_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Tracking & AI
+ort = { version = "2.0.0-rc.9", features = ["load-dynamic"] } # ONNX Runtime
+nokhwa = { version = "0.10", features = ["input-native", "output-threaded"] } # Camera
+image = "0.25" # Image processing
+nalgebra = "0.33" # Linear Algebra (Maths)
+ndarray = "0.17" # Tensor library
+# Async & System
+tokio = { version = "1", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+async-stream = "0.3"
+futures = "0.3"
+anyhow = "1.0"
+# Network
+rosc = "0.10" # OSC (VRChat)
+qrcodegen = "1.8" # QR Code generation
+reqwest = { version = "0.12", features = ["json"] } # HTTP Client for local server
+base64 = "0.22" # For QR code data URI
+regex = "1" # For parsing Cloudflare logs
+# Web Server (MJPEG)
+axum = { version = "0.7", features = ["macros"] }
+tower-http = { version = "0.5", features = ["cors"] }
+bytes = "1"
+
+

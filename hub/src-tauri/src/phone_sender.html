@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>VRChat Bridge Camera</title>
+    <style>
+        :root {
+            --bg-primary: #0a0e14;
+            --bg-secondary: #111820;
+            --accent-primary: #58a6ff;
+            --danger: #f85149;
+            --success: #3fb950;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .header {
+            padding: 15px;
+            background: var(--bg-secondary);
+            text-align: center;
+            border-bottom: 1px solid #30363d;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-weight: bold;
+            color: var(--accent-primary);
+        }
+
+        .status {
+            font-size: 0.8rem;
+            padding: 4px 8px;
+            border-radius: 12px;
+            background: #21262d;
+            color: var(--text-secondary);
+        }
+
+        .status.connected {
+            background: rgba(63, 185, 80, 0.2);
+            color: var(--success);
+        }
+
+        .main-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        .overlay-controls {
+            position: absolute;
+            bottom: 30px;
+            left: 0;
+            width: 100%;
+            z-index: 2;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+        }
+
+        .btn {
+            background: var(--accent-primary);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            border-radius: 30px;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(88, 166, 255, 0.3);
+            transition: transform 0.1s;
+        }
+
+        .btn:active {
+            transform: scale(0.95);
+        }
+
+        .btn-stop {
+            background: var(--danger);
+            box-shadow: 0 4px 12px rgba(248, 81, 73, 0.3);
+            display: none;
+        }
+
+        .info-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 2;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px;
+            border-radius: 8px;
+            backdrop-filter: blur(4px);
+        }
+
+        .info-item {
+            font-size: 0.8rem;
+            margin-bottom: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <div class="logo">VRChat Bridge</div>
+        <div class="status" id="connection-status">Disconnected</div>
+    </div>
+
+    <div class="main-container">
+        <video id="camera-feed" autoplay playsinline muted></video>
+
+        <div class="info-overlay">
+            <div class="info-item" id="resolution-info">Resolution: -</div>
+            <div class="info-item" id="fps-info">FPS: -</div>
+        </div>
+
+        <div class="overlay-controls">
+            <button class="btn" id="start-btn">Start Camera</button>
+            <button class="btn btn-stop" id="stop-btn">Stop</button>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('camera-feed');
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const statusEl = document.getElementById('connection-status');
+        const resInfo = document.getElementById('resolution-info');
+        const fpsInfo = document.getElementById('fps-info');
+
+        let stream = null;
+        let active = false;
+        let frameCount = 0;
+        let lastFrameTime = performance.now();
+        let canvas = document.createElement('canvas');
+        let ctx = canvas.getContext('2d');
+
+        startBtn.onclick = async () => {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'environment',
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        frameRate: { ideal: 30 }
+                    }
+                });
+                video.srcObject = stream;
+
+                // Wait for video to be ready
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    resInfo.textContent = `Resolution: ${video.videoWidth}x${video.videoHeight}`;
+                    startBtn.style.display = 'none';
+                    stopBtn.style.display = 'block';
+                    active = true;
+                    statusEl.textContent = 'Streaming...';
+                    statusEl.classList.add('connected');
+                    sendFrameLoop();
+                };
+            } catch (e) {
+                alert("Camera access failed: " + e.message);
+            }
+        };
+
+        stopBtn.onclick = () => {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+            active = false;
+            startBtn.style.display = 'block';
+            stopBtn.style.display = 'none';
+            statusEl.textContent = 'Disconnected';
+            statusEl.classList.remove('connected');
+        };
+
+        async function sendFrameLoop() {
+            if (!active) return;
+
+            const now = performance.now();
+            frameCount++;
+            if (now - lastFrameTime >= 1000) {
+                fpsInfo.textContent = `FPS: ${frameCount}`;
+                frameCount = 0;
+                lastFrameTime = now;
+            }
+
+            ctx.drawImage(video, 0, 0);
+
+            // Convert to JPEG blob
+            canvas.toBlob(async (blob) => {
+                if (blob) {
+                    try {
+                        const response = await fetch('/push', {
+                            method: 'POST',
+                            body: blob
+                        });
+
+                        if (!response.ok) {
+                            console.warn("Frame dropped");
+                        }
+                    } catch (e) {
+                        console.error("Transmission error", e);
+                    }
+                }
+
+                // Limit to ~30 FPS
+                if (active) requestAnimationFrame(sendFrameLoop);
+            }, 'image/jpeg', 0.7);
+        }
+    </script>
+</body>
+
+</html>

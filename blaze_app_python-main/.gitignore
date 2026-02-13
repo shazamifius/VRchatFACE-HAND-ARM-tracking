@@ -1,0 +1,19 @@
+*.jpg
+*.csv
+
+# blaze_*/__pycache__
+__pycache__/
+
+# models
+*.zip
+blaze_tflite/models/*.tflite
+blaze_tflite_quant/models/*.tflite
+blaze_pytorch/models/*.pth
+blaze_vitisai/models/blaze*/*/*
+blaze_onnx/models/*.onnx
+blaze_rpp/models/*.onnx
+blaze_tflite_qnn/models/*.tflite
+blaze_qairt/models/*.bin
+
+*.log
+
