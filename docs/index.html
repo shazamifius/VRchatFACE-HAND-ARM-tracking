@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>VRChat Face Tracking (MediaPipe)</title>
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            color: #fff;
+            font-family: sans-serif;
+        }
+
+        #container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            aspect-ratio: 4/3;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+        }
+
+        #status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 12px;
+            border-radius: 10px;
+            font-size: 11px;
+            line-height: 1.6;
+            max-width: 90%;
+            z-index: 10;
+        }
+
+        .dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #f00;
+            margin-right: 5px;
+            animation: pulse 2s infinite;
+        }
+
+        .dot.connected {
+            background: #0f0;
+            box-shadow: 0 0 10px #0f0;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            z-index: 10;
+        }
+
+        button {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 30px;
+            backdrop-filter: blur(10px);
+            font-weight: bold;
+            font-size: 13px;
+        }
+
+        button:active {
+            background: rgba(255, 255, 255, 0.4);
+        }
+    </style>
+    <!-- MediaPipe Face Mesh CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+</head>
+
+<body>
+    <div id="container">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <div id="keep-awake" style="display:none; position:absolute; top:10px; right:10px; color:#0f0; font-size:10px;">⚡
+        AWAKE</div>
+
+    <div id="status">
+        <span class="dot" id="dot"></span> <span id="msg">Chargement de MediaPipe...</span>
+        <div id="debug"></div>
+    </div>
+
+    <div id="controls">
+        <button id="btnSwitch">Flip</button>
+        <button id="btnLandmarks">Hide Mesh</button>
+        <div style="display:flex; flex-direction:column; align-items:center; margin-left:10px;">
+            <label style="font-size:10px;">ZOOM</label>
+            <input type="range" id="zoomSlider" min="1" max="3" step="0.1" value="1">
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const dot = document.getElementById('dot');
+        const msg = document.getElementById('msg');
+        const debug = document.getElementById('debug');
+        const zoomSlider = document.getElementById('zoomSlider');
+
+        let postUrl = '/tracking';
+        let facingMode = 'user';
+        let showLandmarks = true;
+        let frameCount = 0;
+        let fpsCounter = 0;
+        let fpsTime = Date.now();
+        let connected = false;
+
+        // Wake Lock
+        let wakeLock = null;
+        async function requestWakeLock() {
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    document.getElementById('keep-awake').style.display = 'block';
+                    console.log('[WakeLock] Active');
+                }
+            } catch (err) {
+                console.warn('[WakeLock] Failed:', err);
+            }
+        }
+        document.addEventListener('visibilitychange', () => {
+            if (wakeLock !== null && document.visibilityState === 'visible') requestWakeLock();
+        });
+        requestWakeLock();
+
+        // Parse tunnel URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const tunnelUrl = urlParams.get('tunnel');
+        if (tunnelUrl) {
+            const target = tunnelUrl.startsWith('http') ? tunnelUrl : 'https://' + tunnelUrl;
+            postUrl = target + '/tracking';
+        }
+
+        debug.innerHTML = `Target: ${postUrl}<br>Mode: MediaPipe + Head Pose`;
+
+        // Detect low-end device
+        const isLowEnd = navigator.hardwareConcurrency < 4 || /Android [4-7]/.test(navigator.userAgent);
+
+        // Initialize MediaPipe Face Mesh
+        const faceMesh = new FaceMesh({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
+
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: !isLowEnd, // Disable iris on old phones for speed
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        console.log('[MediaPipe] Config:', isLowEnd ? 'Low-end mode' : 'High quality mode');
+
+        // Helper: Distance between two points
+        function distance(p1, p2) {
+            const dx = p1.x - p2.x;
+            const dy = p1.y - p2.y;
+            const dz = (p1.z || 0) - (p2.z || 0);
+            return Math.sqrt(dx * dx + dy * dy + dz * dz);
+        }
+
+        // Calculate Eye Aspect Ratio (EAR)
+        function calculateEAR(eye) {
+            const v1 = distance(eye[1], eye[5]);
+            const v2 = distance(eye[2], eye[4]);
+            const h = distance(eye[0], eye[3]);
+            return h > 0.001 ? (v1 + v2) / (2.0 * h) : 0;
+        }
+
+        // Estimate Head Pose (Yaw, Pitch, Roll) from Landmarks
+        function calculateHeadPose(landmarks) {
+            // Indices
+            const noseTip = landmarks[1];
+            const leftEye = landmarks[33];
+            const rightEye = landmarks[263];
+            const chin = landmarks[152];
+            const noseBridge = landmarks[6]; // Between eyes
+
+            // ROLL: Angle between eyes
+            const dy = rightEye.y - leftEye.y;
+            const dx = rightEye.x - leftEye.x;
+            const roll = Math.atan2(dy, dx) * (180 / Math.PI);
+
+            // YAW: Nose horizontal position relative to eyes
+            // -1 (Left) to +1 (Right)
+            const eyeCenter = { x: (leftEye.x + rightEye.x) / 2, y: (leftEye.y + rightEye.y) / 2 };
+            const faceWidth = Math.abs(rightEye.x - leftEye.x);
+            // Normalized deviation of nose from center
+            // Approx range: -0.5 to 0.5 -> Scale to degrees (approx -45 to 45)
+            const yawVal = (noseTip.x - eyeCenter.x) / (faceWidth + 0.0001);
+            const yaw = yawVal * 90; // Scaling factor
+
+            // PITCH: Nose vertical position relative to face height
+            // Ratio of NoseTip-Chin to NoseBridge-Chin
+            const dNoseChin = distance(noseTip, chin);
+            const dBridgeChin = distance(noseBridge, chin);
+            const pitchRatio = dNoseChin / (dBridgeChin + 0.0001);
+            // Nominal ratio ~0.65. >0.65 = Up, <0.65 = Down
+            const pitchDeg = (pitchRatio - 0.65) * 150;
+
+            // Normalize to -1.0 ... 1.0 for VRChat
+            // Assume 45 degrees is "Full" rotation
+            const clamp = (val) => Math.max(-1.0, Math.min(1.0, val));
+
+            return {
+                pitch: clamp(-pitchDeg / 45.0),
+                yaw: clamp(yaw / 45.0),
+                roll: clamp(roll / 45.0)
+            };
+        }
+
+        function calculateBlendshapes(landmarks) {
+            if (!landmarks || landmarks.length < 468) return null;
+
+            // ... Existing Blendshape Logic ...
+            const leftEye = [33, 160, 158, 133, 153, 144].map(i => landmarks[i]);
+            const rightEye = [362, 385, 387, 263, 373, 380].map(i => landmarks[i]);
+
+            const leftEAR = calculateEAR(leftEye);
+            const rightEAR = calculateEAR(rightEye);
+            const eyeBlinkLeft = Math.max(0, Math.min(1, 1 - leftEAR * 2.5));
+            const eyeBlinkRight = Math.max(0, Math.min(1, 1 - rightEAR * 2.5));
+
+            const mouthLeft = landmarks[61];
+            const mouthRight = landmarks[291];
+            const mouthTop = landmarks[13];
+            const mouthBottom = landmarks[14];
+
+            const mouthHeight = distance(mouthTop, mouthBottom);
+            const mouthWidth = distance(mouthLeft, mouthRight);
+            const noseTip = landmarks[1];
+            const chin = landmarks[199];
+            const faceHeight = distance(noseTip, chin);
+
+            const jawOpen = faceHeight > 0.001 ? Math.min(1, mouthHeight / (faceHeight * 0.25)) : 0;
+            const mouthCenter = landmarks[13];
+            const smileLeft = Math.max(0, (mouthCenter.y - mouthLeft.y) / (faceHeight * 0.1));
+            const smileRight = Math.max(0, (mouthCenter.y - mouthRight.y) / (faceHeight * 0.1));
+
+            const neutralMouthWidth = faceHeight * 0.3;
+            const mouthPucker = neutralMouthWidth > 0 ? Math.max(0, 1 - mouthWidth / neutralMouthWidth) : 0;
+
+            const leftBrowInner = landmarks[55];
+            const rightBrowInner = landmarks[285];
+            const noseBridge = landmarks[6];
+            const browInnerUp = Math.max(0, Math.min(1, ((noseBridge.y - leftBrowInner.y) + (noseBridge.y - rightBrowInner.y)) / (faceHeight * 0.15)));
+
+            // HEAD POSE
+            const pose = calculateHeadPose(landmarks);
+
+            // TONGUE HEURISTIC (Simulated)
+            // Rule: If Mouth is Pucker > 0.6 AND Jaw Open > 0.2 (Big "O" face / Kiss) -> Trigger Tongue
+            // This is a common workaround since FaceMesh doesn't see tongue.
+            let tongueOut = 0.0;
+            if (mouthPucker > 0.6 && jawOpen > 0.2) {
+                tongueOut = Math.min(1.0, (mouthPucker - 0.6) * 3.0); // Map 0.6..1.0 to 0..1
+            }
+
+            return {
+                headPitch: pose.pitch,
+                headYaw: pose.yaw,
+                headRoll: pose.roll,
+
+                eyeBlinkLeft, eyeBlinkRight,
+                eyeSquintLeft: eyeBlinkLeft * 0.5,
+                eyeSquintRight: eyeBlinkRight * 0.5,
+                eyeWideLeft: Math.max(0, leftEAR - 0.15) * 2,
+                eyeWideRight: Math.max(0, rightEAR - 0.15) * 2,
+                jawOpen, jawForward: 0, jawLeft: 0, jawRight: 0,
+                mouthSmileLeft: Math.min(1, smileLeft),
+                mouthSmileRight: Math.min(1, smileRight),
+                mouthFrownLeft: 0, mouthFrownRight: 0,
+                mouthPucker: Math.min(1, mouthPucker),
+                mouthFunnel: jawOpen * 0.3,
+                browInnerUp, browOuterUpLeft: browInnerUp * 0.7, browOuterUpRight: browInnerUp * 0.7,
+                browDownLeft: 0, browDownRight: 0,
+                tongueOut: tongueOut
+            };
+        }
+
+        faceMesh.onResults((results) => {
+            // Clear canvas
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                const landmarks = results.multiFaceLandmarks[0];
+
+                if (showLandmarks) {
+                    ctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
+                    for (const landmark of landmarks) {
+                        // Invert X for mirroring
+                        ctx.beginPath();
+                        // Simple landmarks trace
+                        ctx.arc(landmark.x * canvas.width, landmark.y * canvas.height, 1, 0, 2 * Math.PI);
+                        ctx.fill();
+                    }
+                }
+
+                const blendshapes = calculateBlendshapes(landmarks);
+                if (blendshapes) sendBlendshapes(blendshapes);
+            }
+        });
+
+        async function sendBlendshapes(blendshapes) {
+            try {
+                const response = await fetch(postUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(blendshapes)
+                    // mode: 'cors'
+                });
+
+                if (response.ok) {
+                    frameCount++;
+                    fpsCounter++;
+                    connected = true;
+                    dot.classList.add('connected');
+                    const now = Date.now();
+                    if (now - fpsTime >= 1000) {
+                        msg.textContent = `LIVE ${fpsCounter} FPS`;
+                        fpsCounter = 0;
+                        fpsTime = now;
+                    }
+                } else {
+                    dot.classList.remove('connected');
+                }
+            } catch (e) {
+                dot.classList.remove('connected');
+            }
+        }
+
+        // Camera Logic with Zoom Support
+        let currentStream = null;
+        async function startCamera() {
+            if (currentStream) {
+                currentStream.getTracks().forEach(t => t.stop());
+            }
+
+            try {
+                const constraints = {
+                    video: {
+                        facingMode: facingMode,
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        frameRate: { ideal: 30 }
+                        // advanced: [{ zoom: 1 }] // Will be set via applyConstraints
+                    },
+                    audio: false
+                };
+
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                currentStream = stream;
+                video.srcObject = stream;
+
+                await new Promise((resolve) => {
+                    video.onloadedmetadata = () => { video.play(); resolve(); };
+                });
+
+                // Apply initial zoom capability check
+                const track = stream.getVideoTracks()[0];
+                const caps = track.getCapabilities();
+                if (caps.zoom) {
+                    // Enable slider with correct range
+                    zoomSlider.min = caps.zoom.min;
+                    zoomSlider.max = caps.zoom.max;
+                    zoomSlider.step = caps.zoom.step;
+                    zoomSlider.value = caps.zoom.min;
+                    console.log('[Camera] Zoom supported:', caps.zoom);
+
+                    zoomSlider.oninput = () => {
+                        track.applyConstraints({
+                            advanced: [{ zoom: parseFloat(zoomSlider.value) }]
+                        });
+                    };
+                } else {
+                    console.log('[Camera] Zoom NOT supported by hardware. Using digital crop?');
+                    // Fallback to CSS zoom or "Digital Zoom" here if needed
+                    zoomSlider.disabled = true;
+                    zoomSlider.title = "Not supported by device";
+                }
+
+                // Start Processing Loop
+                async function processFrame() {
+                    if (!currentStream.active) return;
+                    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                        await faceMesh.send({ image: video });
+                    }
+                    requestAnimationFrame(processFrame);
+                }
+                processFrame();
+
+            } catch (e) {
+                msg.textContent = `Error: ${e.message}`;
+                console.error(e);
+            }
+        }
+
+        document.getElementById('btnSwitch').onclick = () => {
+            facingMode = facingMode === 'user' ? 'environment' : 'user';
+            startCamera();
+        };
+
+        document.getElementById('btnLandmarks').onclick = (e) => {
+            showLandmarks = !showLandmarks;
+            e.target.textContent = showLandmarks ? 'Hide Landmarks' : 'Show Landmarks';
+        };
+
+        startCamera();
+    </script>
+</body>
+
+</html>

@@ -1,12 +1,12 @@
-# Node
-node_modules/
-hub/node_modules/
+# Build directories
+build/
+out/
+Release/
+Debug/
+x64/
+x86/
 
-# Rust
-target/
-hub/src-tauri/target/
-
-# Vcpkg
+# vcpkg (too large, reinstalls automatically)
 vcpkg/
 vcpkg_installed/
 
@@ -59,10 +59,3 @@ desktop.ini
 # Temporary files
 *.bak
 *.cache
-
-.venv/
-
-# Python
-__pycache__/
-*.py[cod]
-*.class

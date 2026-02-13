@@ -4,11 +4,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>VRChat Bridge Camera</title>
+    <title>VRChat Face Tracking</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Roboto:wght@300;400;700&display=swap"
+        rel="stylesheet">
     <style>
+        :root {
+            --primary: #00f0ff;
+            --secondary: #00ff99;
+            --bg: #050510;
+            --surface: rgba(20, 20, 30, 0.8);
+            --error: #ff2a2a;
+        }
+
         body {
             margin: 0;
-            background: #000;
+            background: var(--bg);
             overflow: hidden;
             display: flex;
             flex-direction: column;
@@ -16,164 +27,503 @@
             justify-content: center;
             height: 100vh;
             color: #fff;
-            font-family: sans-serif;
+            font-family: 'Roboto', sans-serif;
+        }
+
+        #container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #000;
         }
 
         video {
+            position: absolute;
             width: 100%;
             height: 100%;
             object-fit: cover;
             transform: scaleX(-1);
+            opacity: 0.6;
         }
 
-        #status {
+        canvas {
             position: absolute;
-            top: 10px;
-            left: 10px;
-            background: rgba(0, 0, 0, 0.5);
-            padding: 5px 10px;
-            border-radius: 20px;
-            font-size: 12px;
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+        }
+
+        /* HUD Overlay */
+        #hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            z-index: 10;
             pointer-events: none;
         }
 
+        .status-card {
+            background: rgba(10, 10, 15, 0.6);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            max-width: 300px;
+        }
+
+        .status-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .status-title {
+            font-family: 'Orbitron', sans-serif;
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--primary);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
         .dot {
-            display: inline-block;
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background: #f00;
-            margin-right: 5px;
+            background: #555;
+            margin-right: 10px;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
         }
 
         .dot.connected {
-            background: #0f0;
-            box-shadow: 0 0 10px #0f0;
+            background: var(--secondary);
+            box-shadow: 0 0 10px var(--secondary);
+            animation: pulse-green 2s infinite;
         }
 
+        .dot.error {
+            background: var(--error);
+            box-shadow: 0 0 10px var(--error);
+            animation: pulse-red 2s infinite;
+        }
+
+        @keyframes pulse-green {
+            0% {
+                opacity: 1;
+                box-shadow: 0 0 5px var(--secondary);
+            }
+
+            50% {
+                opacity: 0.7;
+                box-shadow: 0 0 15px var(--secondary);
+            }
+
+            100% {
+                opacity: 1;
+                box-shadow: 0 0 5px var(--secondary);
+            }
+        }
+
+        @keyframes pulse-red {
+            0% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+
+            100% {
+                opacity: 1;
+            }
+        }
+
+        #msg {
+            font-size: 13px;
+            color: #ddd;
+            font-weight: 500;
+        }
+
+        #debug {
+            font-size: 10px;
+            color: #888;
+            margin-top: 5px;
+            font-family: monospace;
+        }
+
+        /* Controls */
         #controls {
             position: absolute;
-            bottom: 20px;
+            bottom: 30px;
             width: 100%;
             display: flex;
             justify-content: center;
             gap: 20px;
+            z-index: 20;
         }
 
         button {
-            background: rgba(255, 255, 255, 0.2);
-            border: 1px solid rgba(255, 255, 255, 0.4);
-            color: white;
-            padding: 10px 20px;
-            border-radius: 30px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            padding: 12px 24px;
+            border-radius: 4px;
             backdrop-filter: blur(5px);
+            font-family: 'Orbitron', sans-serif;
+            font-size: 12px;
             font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.2s;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(0, 240, 255, 0.1);
         }
 
         button:active {
-            background: rgba(255, 255, 255, 0.4);
+            background: var(--primary);
+            color: #000;
+            box-shadow: 0 0 20px var(--primary);
+        }
+
+        /* Loading Overlay */
+        #loading {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--bg);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 50;
+            transition: opacity 0.5s;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(0, 240, 255, 0.3);
+            border-top: 3px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        h1 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 18px;
+            margin: 0;
+            letter-spacing: 2px;
+            background: linear-gradient(90deg, #fff, var(--primary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* Scanline effect */
+        .scanlines {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+            z-index: 5;
         }
     </style>
+    <!-- MediaPipe Face Mesh CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"
+        crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
 </head>
 
 <body>
-    <div id="status"><span class="dot" id="dot"></span> <span id="msg">Connecting...</span></div>
-    <video id="cam" autoplay playsinline muted></video>
-    <div id="controls">
-        <button id="btnSwitch">📷 Switch Cam</button>
-        <button id="btnQual">HD Quality</button>
+    <div id="loading">
+        <div class="spinner"></div>
+        <h1>INITIALIZING SYSTEM...</h1>
     </div>
-    <canvas id="canvas" style="display:none;"></canvas>
+
+    <div id="container">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas"></canvas>
+        <div class="scanlines"></div>
+    </div>
+
+    <div id="hud">
+        <div class="status-card">
+            <div class="status-header">
+                <div class="dot" id="dot"></div>
+                <div class="status-title">Face Tracking</div>
+            </div>
+            <div id="msg">Connecting...</div>
+            <div id="debug">Target: Localhost</div>
+        </div>
+    </div>
+
+    <div id="controls">
+        <button id="btnSwitch">SWITCH CAM</button>
+        <button id="btnLandmarks">TOGGLE MESH</button>
+    </div>
 
     <script>
-        const video = document.getElementById('cam');
+        const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const dot = document.getElementById('dot');
         const msg = document.getElementById('msg');
+        const debug = document.getElementById('debug');
+        const loading = document.getElementById('loading');
 
-        let streaming = true;
-        let quality = 0.6; // JPEG quality
-        let interval = 33; // ~30 FPS
-        let facingMode = 'user'; // 'user' or 'environment'
+        let postUrl = '/tracking';
+        let facingMode = 'user';
+        let showLandmarks = true;
+        let frameCount = 0;
+        let fpsCounter = 0;
+        let fpsTime = Date.now();
+        let connected = false;
+        let isLowEnd = false;
 
-        // Start Camera
-        async function startCamera() {
+        // Parse tunnel URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const tunnelUrl = urlParams.get('tunnel');
+        if (tunnelUrl) {
+            const target = tunnelUrl.startsWith('http') ? tunnelUrl : 'https://' + tunnelUrl;
+            postUrl = target + '/tracking';
+        }
+
+        debug.innerHTML = `TARGET: ${postUrl.split('/')[2]}...`;
+
+        // Initialize
+        async function init() {
+            // Detect low-end device
+            isLowEnd = navigator.hardwareConcurrency < 4 || /Android [4-7]/.test(navigator.userAgent);
+            console.log('[System] Mode:', isLowEnd ? 'Performance' : 'Quality');
+
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        facingMode: facingMode,
-                        width: { ideal: 640 },
-                        height: { ideal: 480 },
-                        frameRate: { ideal: 30 }
-                    },
-                    audio: false
+                // Initialize MediaPipe Face Mesh
+                const faceMesh = new FaceMesh({
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
                 });
-                video.srcObject = stream;
-                msg.textContent = "Camera Ready - Sending...";
+
+                faceMesh.setOptions({
+                    maxNumFaces: 1,
+                    refineLandmarks: !isLowEnd,
+                    minDetectionConfidence: isLowEnd ? 0.3 : 0.5,
+                    minTrackingConfidence: isLowEnd ? 0.3 : 0.5
+                });
+
+                faceMesh.onResults(onResults);
+
+                // Start Camera
+                await startCamera(faceMesh);
+
+                // Hide loading screen
+                loading.style.opacity = '0';
+                setTimeout(() => loading.style.display = 'none', 500);
+
             } catch (e) {
-                msg.textContent = "Cam Error: " + e.message;
+                msg.textContent = "INIT FAILED";
+                debug.innerHTML = e.message;
+                dot.className = "dot error";
+                loading.innerHTML = `<h1>SYSTEM ERROR</h1><p>${e.message}</p>`;
             }
         }
 
-        // Send Frame Loop with fetch POST
-        let lastTime = 0;
-        async function sendFrame(time) {
-            if (!streaming) return;
+        // Helper: Distance
+        function distance(p1, p2) {
+            const dx = p1.x - p2.x;
+            const dy = p1.y - p2.y;
+            const dz = (p1.z || 0) - (p2.z || 0);
+            return Math.sqrt(dx * dx + dy * dy + dz * dz);
+        }
 
-            if (time - lastTime >= interval) {
-                if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
+        // Calculate Eye Aspect Ratio (EAR)
+        function calculateEAR(eye) {
+            const v1 = distance(eye[1], eye[5]);
+            const v2 = distance(eye[2], eye[4]);
+            const h = distance(eye[0], eye[3]);
+            return h > 0.001 ? (v1 + v2) / (2.0 * h) : 0;
+        }
 
-                    ctx.save();
-                    if (facingMode === 'user') {
-                        ctx.translate(canvas.width, 0);
-                        ctx.scale(-1, 1);
+        function calculateBlendshapes(landmarks) {
+            if (!landmarks || landmarks.length < 468) return null;
+
+            // Simplified extraction logic for robustness
+            const leftEye = [33, 160, 158, 133, 153, 144].map(i => landmarks[i]);
+            const rightEye = [362, 385, 387, 263, 373, 380].map(i => landmarks[i]);
+
+            const leftEAR = calculateEAR(leftEye);
+            const rightEAR = calculateEAR(rightEye);
+
+            const eyeBlinkLeft = Math.max(0, Math.min(1, 1 - leftEAR * 2.5));
+            const eyeBlinkRight = Math.max(0, Math.min(1, 1 - rightEAR * 2.5));
+
+            // Mouth geometry
+            const mouthTop = landmarks[13];
+            const mouthBottom = landmarks[14];
+            const mouthLeft = landmarks[61];
+            const mouthRight = landmarks[291];
+
+            const mouthHeight = distance(mouthTop, mouthBottom);
+            const mouthWidth = distance(mouthLeft, mouthRight);
+
+            const noseTip = landmarks[1];
+            const chin = landmarks[199];
+            const faceHeight = distance(noseTip, chin);
+
+            const jawOpen = faceHeight > 0.001 ? Math.min(1, mouthHeight / (faceHeight * 0.25)) : 0;
+
+            // Smile
+            const mouthCenter = landmarks[13];
+            const smileLeft = Math.max(0, (mouthCenter.y - mouthLeft.y) / (faceHeight * 0.1));
+            const smileRight = Math.max(0, (mouthCenter.y - mouthRight.y) / (faceHeight * 0.1));
+
+            // Brows
+            const leftBrowInner = landmarks[55];
+            const rightBrowInner = landmarks[285];
+            const noseBridge = landmarks[6];
+            const browInnerUp = Math.max(0, Math.min(1, (noseBridge.y - (leftBrowInner.y + rightBrowInner.y) / 2) / (faceHeight * 0.1)));
+
+            return {
+                eyeBlinkLeft, eyeBlinkRight,
+                eyeSquintLeft: eyeBlinkLeft * 0.5, eyeSquintRight: eyeBlinkRight * 0.5,
+                eyeWideLeft: Math.max(0, leftEAR - 0.15) * 2, eyeWideRight: Math.max(0, rightEAR - 0.15) * 2,
+                jawOpen, jawForward: 0, jawLeft: 0, jawRight: 0,
+                mouthSmileLeft: Math.min(1, smileLeft), mouthSmileRight: Math.min(1, smileRight),
+                mouthFrownLeft: 0, mouthFrownRight: 0,
+                mouthPucker: 0, mouthFunnel: jawOpen * 0.3,
+                browInnerUp, browOuterUpLeft: browInnerUp * 0.7, browOuterUpRight: browInnerUp * 0.7,
+                browDownLeft: 0, browDownRight: 0
+            };
+        }
+
+        function onResults(results) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                const landmarks = results.multiFaceLandmarks[0];
+
+                if (showLandmarks) {
+                    ctx.fillStyle = 'rgba(0, 240, 255, 0.4)';
+                    for (let i = 0; i < landmarks.length; i += 2) { // Optimize: Draw every 2nd point
+                        const x = landmarks[i].x * canvas.width;
+                        const y = landmarks[i].y * canvas.height;
+                        ctx.beginPath();
+                        ctx.arc(x, y, 1, 0, 2 * Math.PI);
+                        ctx.fill();
                     }
-                    ctx.drawImage(video, 0, 0);
-                    ctx.restore();
-
-                    // Send via POST instead of WebSocket
-                    canvas.toBlob(async (blob) => {
-                        if (blob) {
-                            try {
-                                await fetch('/video', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'image/jpeg' },
-                                    body: blob
-                                });
-                                dot.classList.add('connected');
-                                msg.textContent = "LIVE";
-                            } catch (e) {
-                                dot.classList.remove('connected');
-                                msg.textContent = "Error: " + e.message;
-                            }
-                        }
-                    }, 'image/jpeg', quality);
                 }
-                lastTime = time;
+
+                const blendshapes = calculateBlendshapes(landmarks);
+                if (blendshapes) sendBlendshapes(blendshapes);
             }
-            requestAnimationFrame(sendFrame);
+        }
+
+        async function sendBlendshapes(blendshapes) {
+            try {
+                const response = await fetch(postUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(blendshapes),
+                    // mode: 'cors' // Implicit
+                });
+
+                if (response.ok) {
+                    frameCount++;
+                    fpsCounter++;
+                    if (!connected) {
+                        connected = true;
+                        dot.className = "dot connected";
+                        msg.textContent = "ONLINE / TRANSMITTING";
+                        msg.style.color = "var(--secondary)";
+                    }
+
+                    const now = Date.now();
+                    if (now - fpsTime >= 1000) {
+                        msg.textContent = `ONLINE ${fpsCounter} TPS`;
+                        fpsCounter = 0;
+                        fpsTime = now;
+                    }
+                } else {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+            } catch (e) {
+                connected = false;
+                dot.className = "dot error";
+                msg.textContent = "CONNECTION LOST";
+                msg.style.color = "var(--error)";
+                // Throttle debug update to avoid UI flicker
+                if (frameCount % 30 === 0) debug.innerHTML = e.message;
+            }
+        }
+
+        async function startCamera(faceMesh) {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: facingMode,
+                    width: { ideal: 640 },
+                    height: { ideal: 480 },
+                    frameRate: { ideal: 30 }
+                },
+                audio: false
+            });
+
+            video.srcObject = stream;
+
+            await new Promise(resolve => {
+                video.onloadedmetadata = () => {
+                    video.play();
+                    resolve();
+                }
+            });
+
+            // Loop
+            async function process() {
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    await faceMesh.send({ image: video });
+                }
+                requestAnimationFrame(process);
+            }
+            process();
         }
 
         // Controls
         document.getElementById('btnSwitch').onclick = () => {
             facingMode = facingMode === 'user' ? 'environment' : 'user';
-            startCamera();
+            location.reload(); // Simple reload for camera switch
         };
 
-        let hd = false;
-        document.getElementById('btnQual').onclick = (e) => {
-            hd = !hd;
-            quality = hd ? 0.8 : 0.5;
-            e.target.textContent = hd ? "SD Quality" : "HD Quality";
-            e.target.style.background = hd ? "rgba(0, 255, 255, 0.4)" : "";
+        document.getElementById('btnLandmarks').onclick = (e) => {
+            showLandmarks = !showLandmarks;
         };
 
-        // Init - Start camera and sending loop
-        startCamera();
-        requestAnimationFrame(sendFrame);
+        // Run
+        init();
     </script>
 </body>
 
