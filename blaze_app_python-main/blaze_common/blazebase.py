@@ -276,7 +276,18 @@ class BlazeDetectorBase(BlazeBase):
         #print("[BlazeBase._tensors_to_detections] raw_score_tensor min|max = ",np.amin(raw_score_tensor),np.amax(raw_score_tensor))        
         #print("[BlazeBase._tensors_to_detections] clipped_score_tensor thresh=",thresh," min|max = ",np.amin(clipped_score_tensor),np.amax(clipped_score_tensor))        
 
-        detection_scores = 1/(1 + np.exp(-clipped_score_tensor))
+        # Fix overflow in exp: exp(-x) where x is -thresh (negative) -> exp(positive)
+        # float32 exp(88) overflows. thresh is usually 100.
+        # We need to clamp the input to exp to be safe.
+        # detection_scores = 1 / (1 + exp(-x))
+        # If -clipped_score_tensor > 80, exp is huge, score -> 0.
+        # If -clipped_score_tensor < -80, exp is 0, score -> 1.
+        
+        safe_scores = -clipped_score_tensor
+        # Clamp to avoid overflow (assuming float32, max exp is ~88)
+        safe_scores = np.clip(safe_scores, -80, 80)
+        
+        detection_scores = 1/(1 + np.exp(safe_scores))
         detection_scores = np.squeeze(detection_scores, axis=-1)        
 
         #print("[BlazeBase._tensors_to_detections] detection_scores min|max = ",np.amin(detection_scores),np.amax(detection_scores))        

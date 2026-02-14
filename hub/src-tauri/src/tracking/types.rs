@@ -26,3 +26,12 @@ pub struct TrackingStatus {
     pub phone_connected: bool, // [NEW]
     pub latency_ms: u64, // [NEW]
 }
+
+/// Raw tracking data from the AI engine (Python/Rust)
+#[derive(Clone, Debug, Default)]
+pub struct TrackingData {
+    pub face_landmarks: Option<Vec<[f32; 3]>>, // 468 points (x, y, z)
+    pub left_hand_landmarks: Option<Vec<[f32; 3]>>, // 21 points
+    pub right_hand_landmarks: Option<Vec<[f32; 3]>>, // 21 points
+    pub head_rotation: Option<[f32; 4]>, // Quaternion (x, y, z, w)
+}

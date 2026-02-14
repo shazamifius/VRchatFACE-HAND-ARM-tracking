@@ -10,22 +10,27 @@ pub mod connectivity;
 pub mod web_interface;
 pub mod types;
 pub mod blaze;
+pub mod bridge;
+pub mod solver;
+pub mod filter;
 
 use self::camera::CameraManager;
 use self::ai::InferenceEngine;
 use self::spatial::SpatialMapper;
 use self::connectivity::ConnectivityManager;
 use self::web_interface::WebInterface;
-use self::types::TrackingStatus;
+use self::types::{TrackingStatus, TrackingData}; // [modified]
+use self::bridge::OscBridge; // [NEW]
 
 
 pub struct TrackingEngine {
-    pub camera: Arc<Mutex<CameraManager>>, // [FIX] Made public
+    pub camera: Arc<Mutex<CameraManager>>,
     ai: Arc<Mutex<InferenceEngine>>,
     spatial: Arc<Mutex<SpatialMapper>>,
     pub connectivity: Arc<Mutex<ConnectivityManager>>,
-    web_interface: Arc<tokio::sync::Mutex<WebInterface>>, // [FIX] Async Mutex
+    web_interface: Arc<tokio::sync::Mutex<WebInterface>>,
     pub status: Arc<Mutex<TrackingStatus>>,
+    pub data: Arc<Mutex<TrackingData>>, // [NEW] Raw data storage
     running: Arc<Mutex<bool>>,
 }
 
@@ -36,8 +41,9 @@ impl TrackingEngine {
             ai: Arc::new(Mutex::new(InferenceEngine::new())),
             spatial: Arc::new(Mutex::new(SpatialMapper::new())),
             connectivity: Arc::new(Mutex::new(ConnectivityManager::new().unwrap())),
-            web_interface: Arc::new(tokio::sync::Mutex::new(WebInterface::new())), // [FIX] Async Mutex
+            web_interface: Arc::new(tokio::sync::Mutex::new(WebInterface::new())),
             status: Arc::new(Mutex::new(TrackingStatus::default())),
+            data: Arc::new(Mutex::new(TrackingData::default())), // [NEW]
             running: Arc::new(Mutex::new(false)),
         }
     }
@@ -48,9 +54,74 @@ impl TrackingEngine {
         let ai = self.ai.clone();
         let spatial = self.spatial.clone();
         let web = self.web_interface.clone();
-        let status = self.status.clone(); // [FIX] Shadow self.status for closure
+        let status = self.status.clone();
+        let data = self.data.clone(); // [NEW]
 
-        *running.lock().unwrap() = true;
+        let mut running_guard = running.lock().unwrap();
+        if *running_guard {
+            return Ok(());
+        }
+        *running_guard = true;
+        drop(running_guard); // Release lock before long operations
+
+        // Start OSC Bridge (Receiver)
+        let bridge = OscBridge::new(9002).expect("Failed to bind OSC Bridge port 9002");
+        let data_clone = data.clone();
+        let status_clone = status.clone();
+        
+        let bridge_running = running.clone();
+        bridge.start(bridge_running, Box::new(move |addr, args| {
+            // Update TrackingData based on address
+            // /tracking/face/landmarks
+            // /tracking/hand/{i}/landmarks
+            
+            if addr == "/tracking/face/landmarks" {
+                // Parse 468 points (x, y, z)
+                if args.len() == 468 * 3 {
+                    let mut points = Vec::with_capacity(468);
+                    for chunk in args.chunks(3) {
+                         points.push([chunk[0], chunk[1], chunk[2]]);
+                    }
+                    if let Ok(mut d) = data_clone.lock() {
+                        d.face_landmarks = Some(points);
+                    }
+                    if let Ok(mut s) = status_clone.lock() {
+                        s.face_detected = true;
+                    }
+                }
+            } else if addr.starts_with("/tracking/hand/") {
+                // Address: /tracking/hand/{i}/landmarks
+                // We need to parse 'i' but for now, let's just look at the coordinates to assign Left/Right
+                // Heuristic: Center X is 320 (640 width).
+                // If X < 320 => User's Right => Avatar Left
+                // If X > 320 => User's Left => Avatar Right
+                // Note: Mirrors are confusing. Let's start with this.
+
+                if args.len() == 21 * 3 {
+                    let mut points = Vec::with_capacity(21);
+                    for chunk in args.chunks(3) {
+                         points.push([chunk[0], chunk[1], chunk[2]]);
+                    }
+                    
+                    if let Some(wrist) = points.first() {
+                         let x = wrist[0];
+                         let is_right_hand = x < 320.0; // User Right (Mirror) = Screen Left
+                         
+                         if let Ok(mut d) = data_clone.lock() {
+                             if is_right_hand {
+                                 d.right_hand_landmarks = Some(points);
+                             } else {
+                                 d.left_hand_landmarks = Some(points);
+                             }
+                         }
+                         if let Ok(mut s) = status_clone.lock() {
+                             if is_right_hand { s.right_hand_detected = true; }
+                             else { s.left_hand_detected = true; }
+                         }
+                    }
+                }
+            }
+        }));
 
         // Start Web Server
         let web_clone = web.clone();
@@ -86,7 +157,15 @@ impl TrackingEngine {
              if let Ok(mut engine) = ai.lock() {
                  let cwd = std::env::current_dir().unwrap_or_default();
                  let models_dir = if cwd.join("models").exists() { cwd.join("models") } else { cwd.join("../models") };
-                 if let Err(e) = engine.load_models(models_dir.to_str().unwrap_or(".")) { println!("[Rust] Failed to load models: {}", e); }
+                 
+                 // [REVERT] Local Inference Disabled due to ORT Version Mismatch (Needs v1.23+, found v1.17).
+                 // Falling back to Python Tracker which is stable.
+                 // if let Err(e) = engine.load_models(models_dir.to_str().unwrap_or(".")) { 
+                 //    println!("[Rust] Failed to load models: {}", e); 
+                 // } else {
+                 //    println!("[Rust] Local Models Loaded Successfully.");
+                 // }
+                 println!("[Rust] Local Inference Disabled. Waiting for Python Bridge data...");
              }
              if let Ok(mut cam) = camera.lock() {
                  if camera_index != 999 {
@@ -175,6 +254,47 @@ impl TrackingEngine {
             // Cleanup
             if let Ok(mut cam) = camera.lock() { cam.stop(); }
             println!("[Rust] Tracking thread stopped");
+        });
+
+        // Logic Thread (60 FPS)
+        let data_logic = data.clone();
+        let connectivity_logic = self.connectivity.clone();
+        let running_logic = self.running.clone();
+        
+        use self::solver::Solver;
+        
+        thread::spawn(move || {
+            let mut solver = Solver::new();
+            println!("[Rust] Logic thread started");
+            
+            while *running_logic.lock().unwrap() {
+                let start = std::time::Instant::now();
+                
+                // 1. Get Data
+                let tracking_data = {
+                    let guard = data_logic.lock().unwrap();
+                    guard.clone()
+                };
+
+                // 2. Solve
+                let params = solver.solve(&tracking_data);
+
+                // 3. Send to VRChat
+                if !params.is_empty() {
+                    let conn = connectivity_logic.lock().unwrap();
+                    if let Err(_e) = conn.send_tracking_data(params) {
+                         // eprintln!("[Rust] Failed to send OSC: {}", e); 
+                         // Don't spam logs
+                    }
+                }
+
+                // 4. Sleep to maintain ~60 FPS
+                let elapsed = start.elapsed();
+                if elapsed < Duration::from_millis(16) {
+                    thread::sleep(Duration::from_millis(16) - elapsed);
+                }
+            }
+            println!("[Rust] Logic thread stopped");
         });
 
         Ok(())
