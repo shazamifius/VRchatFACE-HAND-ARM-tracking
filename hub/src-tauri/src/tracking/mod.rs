@@ -166,6 +166,7 @@ impl TrackingEngine {
                  //    println!("[Rust] Local Models Loaded Successfully.");
                  // }
                  println!("[Rust] Local Inference Disabled. Waiting for Python Bridge data...");
+                 return; // [FIX] Exit camera thread so Python can use the Webcam.
              }
              if let Ok(mut cam) = camera.lock() {
                  if camera_index != 999 {

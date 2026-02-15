@@ -62,7 +62,41 @@ impl ConnectivityManager {
 
     /// Send full tracking data to VRChat
     pub fn send_tracking_data(&self, face_params: Vec<(String, f32)>) -> Result<()> {
-        // Aggregate Params for Vectors
+        // [NEW] Send Activator Params (Once per frame or periodically? Let's just send with frame)
+        // Many systems need a "IsActive" float/bool to transition to the tracking layer.
+        self.send_bool_param("FaceTrackingActive", true);
+        self.send_bool_param("FaceTracking", true);
+        self.send_bool_param("OSC", true);
+        self.send_bool_param("PancakeMode", true); // Often used for Desktop Body Tracking enablement
+        
+        // Flux-Chan Specifics
+        self.send_bool_param("LipTrackingActive", true);
+        self.send_bool_param("EyeTrackingActive", true);
+        self.send_bool_param("FTOn", true);
+        self.send_bool_param("FTOff", false);
+        self.send_bool_param("FacialExpressionsDisabled", false);
+
+        // Also send Floats just in case (some avatars use Float 1.0 for TRUE)
+        self.send_avatar_param("FaceTrackingActive", 1.0);
+        self.send_avatar_param("FaceTracking", 1.0);
+        self.send_avatar_param("OSC", 1.0);
+        
+        // [REMOVED] Conflicting Float sends for Lip/EyeTrackingActive (caused trembling)
+        // self.send_avatar_param("LipTrackingActive", 1.0); 
+        // self.send_avatar_param("EyeTrackingActive", 1.0);
+        
+        // self.send_avatar_param("LipTracking", 1.0);
+        // self.send_avatar_param("EyeTracking", 1.0);
+        
+        // [NEW] Force Gesture Control OFF (0.0 often means "Let OSC control it")
+        self.send_avatar_param("LipTracking_GestureControl", 0.0);
+        self.send_avatar_param("EyeTracking_GestureControl", 0.0);
+        
+        // [NEW] Force Gesture Control OFF (0.0 often means "Let OSC control it")
+        // Some systems use 1.0 to ENABLE gestures (overriding OSC). Try 0.0 first.
+        self.send_avatar_param("LipTracking_GestureControl", 0.0);
+        self.send_avatar_param("EyeTracking_GestureControl", 0.0);
+
         let mut head_pos = Vector3::new(0.0, 0.0, 0.0);
         let mut head_rot = Vector3::new(0.0, 0.0, 0.0); // Pitch, Yaw, Roll
         
@@ -76,11 +110,26 @@ impl ConnectivityManager {
         let mut has_left_hand = false;
         let mut has_right_hand = false;
 
+
+
+        // [NEW] Smart Eyes: Check Brows first
+        let mut brow_max_open = 0.8; 
+        for (p, v) in &face_params {
+            if p == "BrowInnerUp" || p.starts_with("BrowOuterUp") {
+                // If brows are UP (1.0), allow eyes to open to 1.0 (Surprise).
+                // If brows are DOWN (0.0), max is 0.8 (Normal).
+                let intent = 0.8 + (0.2 * v);
+                if intent > brow_max_open { brow_max_open = intent; }
+            }
+        }
+
         for (param, value) in face_params {
              // System Rotations handling
             if param.starts_with("SYS_HEAD_ROT_") { continue; }
             if param.starts_with("HandLeftRot_") { continue; } 
             if param.starts_with("HandRightRot_") { continue; }
+
+
 
             // Head Aggregation
             if param == "HeadPos_X" { head_pos.x = value; has_head_pos = true; continue; }
@@ -126,21 +175,60 @@ impl ConnectivityManager {
             let addr = format!("/avatar/parameters/{}", param);
             let _ = self.send_osc(&addr, vec![OscType::Float(value)]);
 
-            // Aliases
+            // Aliases & Unified Expressions (UE) Support
              if param == "JawOpen" {
                 self.send_avatar_param("MouthOpen", value);
                 self.send_avatar_param("Voice", value); 
                 self.send_avatar_param("vrc_MouthOpen", value);
                 self.send_avatar_param("Aperture", value);
+                // UE / FT variants
+                self.send_avatar_param("jawOpen", value); 
+                self.send_avatar_param("mouthOpen", value);
+                // Native
+                self.send_avatar_param("VRCFaceBlendShape_JawOpen", value);
+                // FT V2 (Flux-Chan)
+                self.send_avatar_param("FT/v2/JawOpen", value);
+                
+                // [NEW] Honey-Ichigo / Standard Viseme
+                self.send_avatar_param("Voice", value);
             }
+            
+            // [NEW] Honey-Ichigo OSCm
+            if param == "CheekPuff" {
+                self.send_avatar_param("CheekPuff", value);
+                self.send_avatar_param("OSCm/BlendSetRight", value);
+                self.send_avatar_param("OSCm/BlendSetLeft", value);
+                // FT V2
+                self.send_avatar_param("FT/v2/CheekPuff", value);
+            }
+            
             if param == "EyeBlinkLeft" {
                  self.send_avatar_param("BlinkLeft", value);
                  self.send_avatar_param("EyeOpenLeft", 1.0 - value); 
-                 self.send_avatar_param("EyesClosed", value); 
+                 self.send_avatar_param("EyesClosed", value);
+                 // UE
+                 self.send_avatar_param("eyeClosedLeft", value);
+                 self.send_avatar_param("blinkLeft", value);
+                 // PascalCase / Legacy support
+                 self.send_avatar_param("EyeClosedLeft", value);
+                 // Native
+                 self.send_avatar_param("VRCFaceBlendShape_EyeBlinkLeft", value);
+                 // FT V2 (Inverted & Scaled Dynamically)
+                 // 1.0 is often "Wide Open / Surprise". 0.8 is usually "Normal".
+                 self.send_avatar_param("FT/v2/EyeLidLeft", (1.0 - value) * brow_max_open); 
             }
             if param == "EyeBlinkRight" {
                  self.send_avatar_param("BlinkRight", value);
                  self.send_avatar_param("EyeOpenRight", 1.0 - value); 
+                 // UE
+                 self.send_avatar_param("eyeClosedRight", value);
+                 self.send_avatar_param("blinkRight", value);
+                 // PascalCase / Legacy support
+                 self.send_avatar_param("EyeClosedRight", value);
+                 // Native
+                 self.send_avatar_param("VRCFaceBlendShape_EyeBlinkRight", value);
+                 // FT V2 (Inverted & Scaled Dynamically)
+                 self.send_avatar_param("FT/v2/EyeLidRight", (1.0 - value) * brow_max_open);
             }
         }
 
@@ -190,6 +278,12 @@ impl ConnectivityManager {
     }
 
     // Helper to send variants
+    // Helper to send variants
+    fn send_bool_param(&self, param: &str, value: bool) {
+         let addr = format!("/avatar/parameters/{}", param);
+         let _ = self.send_osc(&addr, vec![OscType::Bool(value)]);
+    }
+
     fn send_avatar_param(&self, param: &str, value: f32) {
          let addr = format!("/avatar/parameters/{}", param);
          let _ = self.send_osc(&addr, vec![OscType::Float(value)]);
