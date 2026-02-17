@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VRChat Bridge Hub</title>
+  <script type="module" src="/main.js" defer></script>
+  <script>
+    window.onerror = function (message, source, lineno, colno, error) {
+      const errDiv = document.createElement('div');
+      errDiv.style.position = 'fixed';
+      errDiv.style.top = '0';
+      errDiv.style.left = '0';
+      errDiv.style.width = '100%';
+      errDiv.style.background = 'red';
+      errDiv.style.color = 'white';
+      errDiv.style.zIndex = '9999';
+      errDiv.style.padding = '10px';
+      errDiv.innerText = 'JS Error: ' + message + ' at ' + source + ':' + lineno;
+      document.body.appendChild(errDiv);
+      return false;
+    };
+
+    // Check Tauri availability
+    document.addEventListener('DOMContentLoaded', () => {
+      if (!window.__TAURI__) {
+        const errDiv = document.createElement('div');
+        errDiv.style.position = 'fixed';
+        errDiv.style.top = '30px';
+        errDiv.style.left = '0';
+        errDiv.style.width = '100%';
+        errDiv.style.background = 'orange';
+        errDiv.style.color = 'white';
+        errDiv.style.zIndex = '9999';
+        errDiv.style.padding = '10px';
+        errDiv.innerText = 'Warning: window.__TAURI__ is undefined!';
+        document.body.appendChild(errDiv);
+      } else {
+        if (!window.__TAURI__.core) {
+          const errDiv = document.createElement('div');
+          errDiv.style.position = 'fixed';
+          errDiv.style.top = '60px'; // Offset
+          errDiv.style.left = '0';
+          errDiv.style.width = '100%';
+          errDiv.style.background = 'orange';
+          errDiv.style.color = 'white';
+          errDiv.style.zIndex = '9999';
+          errDiv.style.padding = '10px';
+          errDiv.innerText = 'Warning: window.__TAURI__.core is undefined! Keys: ' + Object.keys(window.__TAURI__).join(',');
+          document.body.appendChild(errDiv);
+        }
+      }
+    });
+  </script>
+</head>
+
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <div class="logo">
+          <svg class="logo-icon" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" />
+            <circle cx="12" cy="12" r="4" fill="currentColor" />
+            <path d="M12 2V6M12 18V22M2 12H6M18 12H22" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+          <span class="logo-text">VRChat Bridge</span>
+        </div>
+        <span class="version-badge">v0.2.0</span>
+      </div>
+      <div class="header-right">
+        <div class="status-indicator" id="status-indicator">
+          <span class="status-dot"></span>
+          <span class="status-text">Disconnected</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content - Two Column Layout -->
+    <main class="main-content">
+      <!-- Left Column: Video Preview -->
+      <section class="video-section">
+        <div class="video-container">
+          <div class="video-wrapper" id="video-wrapper">
+            <!-- Landmark Canvas (no raw video, just skeleton/stats) -->
+            <canvas id="landmark-canvas" class="video-frame" width="640" height="480"></canvas>
+            <!-- Hidden img for MJPEG stream (used as data source, not displayed) -->
+            <img id="video-frame" class="video-frame" alt="" style="display:none;" />
+
+            <!-- Placeholder when no tracking -->
+            <div class="video-placeholder" id="video-placeholder">
+              <svg viewBox="0 0 24 24" fill="none">
+                <rect x="2" y="4" width="20" height="16" rx="2" stroke="currentColor" stroke-width="2" />
+                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" />
+              </svg>
+              <span>Select a camera and start tracking</span>
+            </div>
+
+            <!-- Tracking Status Overlay -->
+            <div class="video-overlay" id="video-overlay">
+              <div class="overlay-stats">
+                <div class="overlay-stat">
+                  <span class="stat-icon face-icon" id="face-indicator">👤</span>
+                  <span class="stat-label">Face</span>
+                </div>
+                <div class="overlay-stat">
+                  <span class="stat-icon hand-icon" id="lhand-indicator">🤚</span>
+                  <span class="stat-label">L-Hand</span>
+                </div>
+                <div class="overlay-stat">
+                  <span class="stat-icon hand-icon" id="rhand-indicator">✋</span>
+                  <span class="stat-label">R-Hand</span>
+                </div>
+              </div>
+              <div class="overlay-fps">
+                <span id="fps-display">0</span>
+                <span class="fps-label">FPS</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Column: Controls -->
+      <section class="controls-section">
+        <!-- Camera Selection -->
+        <div class="control-card">
+          <div class="card-header">
+            <h3 class="card-title">
+              <svg viewBox="0 0 24 24" fill="none" class="card-icon">
+                <rect x="2" y="4" width="20" height="16" rx="2" stroke="currentColor" stroke-width="2" />
+                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" />
+              </svg>
+              Camera Source
+            </h3>
+          </div>
+          <div class="card-body">
+            <div class="input-row">
+              <select id="camera-select" class="select-input">
+                <option value="-1">Detecting cameras...</option>
+              </select>
+              <button class="btn-icon-small" id="refresh-cameras-btn" title="Refresh">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M21 12a9 9 0 11-2.636-6.364" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                  <path d="M21 3v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-linejoin="round" />
+                </svg>
+              </button>
+            </div>
+            <p class="camera-info" id="camera-info">No camera selected</p>
+
+            <!-- Mirror Toggle -->
+            <div class="input-row" style="margin-top: 10px; align-items: center;">
+              <label class="module-toggle" style="flex:1;">
+                <input type="checkbox" id="toggle-mirror" checked />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Mirror View</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tracking Modules -->
+        <div class="control-card">
+          <div class="card-header">
+            <h3 class="card-title">
+              <svg viewBox="0 0 24 24" fill="none" class="card-icon">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" />
+                <circle cx="9" cy="10" r="1.5" fill="currentColor" />
+                <circle cx="15" cy="10" r="1.5" fill="currentColor" />
+                <path d="M8 15s1.5 2 4 2 4-2 4-2" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              </svg>
+              Tracking Modules
+            </h3>
+          </div>
+          <div class="card-body">
+            <div class="module-list">
+              <label class="module-toggle">
+                <input type="checkbox" id="toggle-face" checked />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Face Tracking</span>
+                <span class="toggle-status" id="face-status">Off</span>
+              </label>
+              <label class="module-toggle">
+                <input type="checkbox" id="toggle-hands" checked />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Hand Tracking</span>
+                <span class="toggle-status" id="hands-status">Off</span>
+              </label>
+              <label class="module-toggle">
+                <input type="checkbox" id="toggle-pose" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Body Pose</span>
+                <span class="toggle-status" id="pose-status">Off</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Calibration & Quality -->
+        <div class="control-card">
+          <div class="card-header">
+            <h3 class="card-title">
+              <svg viewBox="0 0 24 24" fill="none" class="card-icon">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" />
+                <path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="2" />
+              </svg>
+              Calibration
+            </h3>
+          </div>
+          <div class="card-body">
+            <div class="btn-group-vertical">
+              <button class="btn-outline" id="calib-neutral-btn">
+                <span>😐 Neutral Face (2s)</span>
+              </button>
+              <button class="btn-outline" id="calib-tpose-btn">
+                <span>🧍 T-Pose (Arms)</span>
+              </button>
+              <!-- <button class="btn-outline" id="calib-center-btn">
+                  <span>👀 Center Gaze</span>
+              </button> -->
+            </div>
+            <p class="helper-text">Stand still and look at screen.</p>
+          </div>
+        </div>
+
+        <!-- Quality & Performance -->
+        <div class="control-card">
+          <div class="card-header">
+            <h3 class="card-title">
+              <svg viewBox="0 0 24 24" fill="none" class="card-icon">
+                <path d="M13 10V3L4 14h7v7l9-11h-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                  stroke-linejoin="round" />
+              </svg>
+              Quality
+            </h3>
+            <div class="osc-status" id="quality-status">
+              <span class="osc-dot"></span>
+              <span>Good</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="input-group">
+              <label>Tracking Mode</label>
+              <div class="segment-control">
+                <button class="segment-btn " data-quality="Low">Low</button>
+                <button class="segment-btn active" data-quality="Medium">Med</button>
+                <button class="segment-btn" data-quality="High">High</button>
+              </div>
+            </div>
+            <p class="helper-text" id="quality-desc">Balanced performance.</p>
+          </div>
+        </div>
+
+        <!-- OSC Configuration -->
+        <div class="control-card">
+          <div class="card-header">
+            <h3 class="card-title">
+              <svg viewBox="0 0 24 24" fill="none" class="card-icon">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" />
+                <path d="M12 6v6l4 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              </svg>
+              VRChat OSC
+            </h3>
+            <div class="osc-status" id="osc-status">
+              <span class="osc-dot"></span>
+              <span>Disconnected</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="input-grid">
+              <div class="input-group">
+                <label for="osc-ip">IP Address</label>
+                <input type="text" id="osc-ip" class="text-input" value="127.0.0.1" />
+              </div>
+              <div class="input-group">
+                <label for="osc-port">Port</label>
+                <input type="number" id="osc-port" class="text-input" value="9000" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Phone Mode -->
+        <div class="control-card compact">
+          <div class="card-body phone-mode">
+            <svg viewBox="0 0 24 24" fill="none" class="phone-icon">
+              <rect x="5" y="2" width="14" height="20" rx="2" stroke="currentColor" stroke-width="2" />
+              <line x1="12" y1="18" x2="12" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+            <div class="phone-text">
+              <span class="phone-title">Use Phone as Camera</span>
+              <span class="phone-desc">Scan QR code to connect</span>
+            </div>
+            <button class="btn-outline-small" id="phone-mode-btn">Setup</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer: Action Bar -->
+    <footer class="action-bar">
+      <div class="action-info">
+        <div class="latency-display">
+          <span class="latency-label">Latency</span>
+          <span class="latency-value" id="latency-value">--</span>
+          <span class="latency-unit">ms</span>
+        </div>
+      </div>
+      <div class="action-buttons">
+        <button class="btn-primary btn-large" id="start-btn">
+          <svg viewBox="0 0 24 24" fill="none">
+            <polygon points="5,3 19,12 5,21" fill="currentColor" />
+          </svg>
+          <span>Start Tracking</span>
+        </button>
+        <button class="btn-danger btn-large hidden" id="stop-btn">
+          <svg viewBox="0 0 24 24" fill="none">
+            <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+          </svg>
+          <span>Stop Tracking</span>
+        </button>
+      </div>
+      <div class="action-spacer"></div>
+    </footer>
+  </div>
+  <!-- QR Code Modal -->
+  <div id="qr-modal" class="modal hidden">
+    <div class="modal-content">
+      <span class="close-modal">&times;</span>
+      <h2>Scan to Connect</h2>
+      <div id="qr-container"></div>
+      <p>Scan this code with your phone camera to start streaming.</p>
+    </div>
+  </div>
+</body>
+
+</html>

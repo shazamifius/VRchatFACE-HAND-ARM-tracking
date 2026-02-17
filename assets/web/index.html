@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>VRChat Bridge Camera</title>
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            color: #fff;
+            font-family: sans-serif;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+        }
+
+        #status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            pointer-events: none;
+        }
+
+        .dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #f00;
+            margin-right: 5px;
+        }
+
+        .dot.connected {
+            background: #0f0;
+            box-shadow: 0 0 10px #0f0;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+        }
+
+        button {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 30px;
+            backdrop-filter: blur(5px);
+            font-weight: bold;
+        }
+
+        button:active {
+            background: rgba(255, 255, 255, 0.4);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="status"><span class="dot" id="dot"></span> <span id="msg">Connecting...</span></div>
+    <video id="cam" autoplay playsinline muted></video>
+    <div id="controls">
+        <button id="btnSwitch">📷 Switch Cam</button>
+        <button id="btnQual">HD Quality</button>
+    </div>
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <script>
+        const video = document.getElementById('cam');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const dot = document.getElementById('dot');
+        const msg = document.getElementById('msg');
+
+        let streaming = true;
+        let quality = 0.6; // JPEG quality
+        let interval = 33; // ~30 FPS
+        let facingMode = 'user'; // 'user' or 'environment'
+
+        // Start Camera
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: facingMode,
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        frameRate: { ideal: 30 }
+                    },
+                    audio: false
+                });
+                video.srcObject = stream;
+                msg.textContent = "Camera Ready - Sending...";
+            } catch (e) {
+                msg.textContent = "Cam Error: " + e.message;
+            }
+        }
+
+        // Send Frame Loop with fetch POST
+        let lastTime = 0;
+        async function sendFrame(time) {
+            if (!streaming) return;
+
+            if (time - lastTime >= interval) {
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+
+                    ctx.save();
+                    if (facingMode === 'user') {
+                        ctx.translate(canvas.width, 0);
+                        ctx.scale(-1, 1);
+                    }
+                    ctx.drawImage(video, 0, 0);
+                    ctx.restore();
+
+                    // Send via POST instead of WebSocket
+                    canvas.toBlob(async (blob) => {
+                        if (blob) {
+                            try {
+                                await fetch('/video', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'image/jpeg' },
+                                    body: blob
+                                });
+                                dot.classList.add('connected');
+                                msg.textContent = "LIVE";
+                            } catch (e) {
+                                dot.classList.remove('connected');
+                                msg.textContent = "Error: " + e.message;
+                            }
+                        }
+                    }, 'image/jpeg', quality);
+                }
+                lastTime = time;
+            }
+            requestAnimationFrame(sendFrame);
+        }
+
+        // Controls
+        document.getElementById('btnSwitch').onclick = () => {
+            facingMode = facingMode === 'user' ? 'environment' : 'user';
+            startCamera();
+        };
+
+        let hd = false;
+        document.getElementById('btnQual').onclick = (e) => {
+            hd = !hd;
+            quality = hd ? 0.8 : 0.5;
+            e.target.textContent = hd ? "SD Quality" : "HD Quality";
+            e.target.style.background = hd ? "rgba(0, 255, 255, 0.4)" : "";
+        };
+
+        // Init - Start camera and sending loop
+        startCamera();
+        requestAnimationFrame(sendFrame);
+    </script>
+</body>
+
+</html>
