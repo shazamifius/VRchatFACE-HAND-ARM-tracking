@@ -30,8 +30,50 @@ pub struct Solver {
     saccade_timer: std::time::Instant,
     saccade_duration: std::time::Duration,
     
-    _last_blink_time: std::time::Instant,
+    // Auto-Blink System
+    auto_blink_timer: std::time::Instant,
+    auto_blink_next_interval: std::time::Duration, // 3-7s
+    auto_blink_active: bool,
+    auto_blink_end: std::time::Instant,
+    
+    // Deterministic PRNG (replaces rand)
+    prng_state: u64,
+    
+    // Micro-Expressions (ambient face life)
+    micro_brow_timer: std::time::Instant,
+    micro_brow_interval: std::time::Duration,
+    micro_brow_target: f32,
+    micro_cheek_timer: std::time::Instant,
+    micro_cheek_interval: std::time::Duration,
+    micro_cheek_target: f32,
+    micro_mouth_timer: std::time::Instant,
+    micro_mouth_interval: std::time::Duration,
+    micro_mouth_target: f32,
+    
+    // Fallback State (graceful degradation)
+    face_lost_at: Option<std::time::Instant>,
+    last_face_params: Vec<(String, f32)>,
+    left_hand_lost_at: Option<std::time::Instant>,
+    right_hand_lost_at: Option<std::time::Instant>,
+    
     filter_params: (f32, f32), // (min_cutoff, beta)
+}
+
+#[derive(Debug, Clone)]
+pub struct TrackerData {
+    pub id: i32, // 0=Head, 1=LeftHand, 2=RightHand
+    pub position: [f32; 3],
+    pub rotation: [f32; 4], // x, y, z, w
+}
+
+#[derive(Debug, Clone)]
+pub struct SolverOutput {
+    pub params: Vec<(String, f32)>,
+    pub trackers: Vec<TrackerData>,
+}
+
+impl Default for Solver {
+    fn default() -> Self { Self::new() }
 }
 
 impl Solver {
@@ -52,7 +94,31 @@ impl Solver {
             saccade_target: (0.0, 0.0),
             saccade_timer: std::time::Instant::now(),
             saccade_duration: std::time::Duration::from_millis(100),
-            _last_blink_time: std::time::Instant::now(),
+            
+            // Auto-Blink
+            auto_blink_timer: std::time::Instant::now(),
+            auto_blink_next_interval: std::time::Duration::from_millis(4000),
+            auto_blink_active: false,
+            auto_blink_end: std::time::Instant::now(),
+            prng_state: 0xDEAD_BEEF_CAFE_u64,
+            
+            // Micro-Expressions
+            micro_brow_timer: std::time::Instant::now(),
+            micro_brow_interval: std::time::Duration::from_millis(5000),
+            micro_brow_target: 0.0,
+            micro_cheek_timer: std::time::Instant::now(),
+            micro_cheek_interval: std::time::Duration::from_millis(8000),
+            micro_cheek_target: 0.0,
+            micro_mouth_timer: std::time::Instant::now(),
+            micro_mouth_interval: std::time::Duration::from_millis(6000),
+            micro_mouth_target: 0.0,
+            
+            // Fallback
+            face_lost_at: None,
+            last_face_params: Vec::new(),
+            left_hand_lost_at: None,
+            right_hand_lost_at: None,
+            
             filter_params: (1.5, 0.01), // Default Medium
         }
     }
@@ -79,17 +145,64 @@ impl Solver {
         new_val
     }
 
+    /// Deterministic PRNG: LCG next value, returns 0.0..1.0
+    pub fn prng_next(&mut self) -> f32 {
+        self.prng_state = self.prng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((self.prng_state >> 33) as u32 as f32) / (u32::MAX as f32)
+    }
+    
+    /// PRNG in range [lo, hi)
+    pub fn prng_range(&mut self, lo: f32, hi: f32) -> f32 {
+        lo + self.prng_next() * (hi - lo)
+    }
+
     fn update_saccades(&mut self) -> (f32, f32) {
-        // ... existing saccade logic ...
         if self.saccade_timer.elapsed() > self.saccade_duration {
-            use rand::Rng;
-            let mut rng = rand::thread_rng();
-            let range = if rng.gen_bool(0.1) { 0.2 } else { 0.02 }; 
-            self.saccade_target = (rng.gen_range(-range..range), rng.gen_range(-range..range));
-            self.saccade_duration = std::time::Duration::from_millis(rng.gen_range(200..500));
+            let is_large = self.prng_next() < 0.1; // 10% chance of large saccade
+            let range = if is_large { 0.2 } else { 0.02 };
+            let p = self.prng_range(-range, range);
+            let y = self.prng_range(-range, range);
+            self.saccade_target = (p, y);
+            let dur_ms = self.prng_range(200.0, 500.0) as u64;
+            self.saccade_duration = std::time::Duration::from_millis(dur_ms);
             self.saccade_timer = std::time::Instant::now();
         }
         self.saccade_target
+    }
+    
+    /// Auto-blink: fires every 3-7s if no real blink detected, ~150ms duration
+    pub fn update_auto_blink(&mut self, real_blink_detected: bool) -> f32 {
+        // If the user is really blinking, skip auto-blink
+        if real_blink_detected {
+            // Reset timer so auto-blink doesn't fire right after real blink
+            self.auto_blink_timer = std::time::Instant::now();
+            self.auto_blink_active = false;
+            return 0.0;
+        }
+        
+        // Check if an auto-blink is currently active
+        if self.auto_blink_active {
+            if std::time::Instant::now() < self.auto_blink_end {
+                return 1.0; // Eyes closed during auto-blink
+            }
+            // Blink finished
+            self.auto_blink_active = false;
+            self.auto_blink_timer = std::time::Instant::now();
+            // Schedule next blink (3-7s)
+            let next_ms = self.prng_range(3000.0, 7000.0) as u64;
+            self.auto_blink_next_interval = std::time::Duration::from_millis(next_ms);
+        }
+        
+        // Check if it's time to fire an auto-blink
+        if self.auto_blink_timer.elapsed() > self.auto_blink_next_interval {
+            self.auto_blink_active = true;
+            // Duration: 120-180ms
+            let dur_ms = self.prng_range(120.0, 180.0) as u64;
+            self.auto_blink_end = std::time::Instant::now() + std::time::Duration::from_millis(dur_ms);
+            return 1.0;
+        }
+        
+        0.0
     }
 
     pub fn set_quality(&mut self, quality: &str) {
@@ -118,11 +231,14 @@ impl Solver {
 
 
 
-    pub fn solve(&mut self, data: &TrackingData) -> Vec<(String, f32)> {
+
+    pub fn solve(&mut self, data: &TrackingData) -> SolverOutput {
         let mut params = Vec::new();
+        let mut trackers = Vec::new();
         let mut cal_face_data = HashMap::new();
         
-        // ... [Face Logic same as before] ...
+        // ... [Head Logic] ...
+        
         if let Some(face) = &data.face_landmarks {
             let get_pt_2d = |idx: usize| -> Vector2<f32> {
                 if idx < face.len() {
@@ -159,21 +275,23 @@ impl Solver {
             let mut ty = t_dead.y;
             let mut tz = t_dead.z;
 
-            let filter_val = |filters: &mut HashMap<String, OneEuroFilter>, name: &str, val: f32, min_cutoff: f32, beta: f32| -> f32 {
-                let f = filters.entry(name.to_string()).or_insert_with(|| OneEuroFilter::new(min_cutoff, beta));
+            let h_mc = self.filter_params.0; 
+            let h_beta = self.filter_params.1;
+            
+            // Helper closure moved up or cloned? We can just re-define or use self method if I made one.
+            // Inline for now to avoid borrowing issues
+            let mut filter_val = |name: &str, val: f32| -> f32 {
+                let f = self.filters.entry(name.to_string()).or_insert_with(|| OneEuroFilter::new(h_mc, h_beta));
                 f.filter(val)
             };
 
-            let h_mc = self.filter_params.0; 
-            let h_beta = self.filter_params.1;
+            pitch = filter_val("HeadPitch", pitch);
+            yaw = filter_val("HeadYaw", yaw);
+            roll = filter_val("HeadRoll", roll);
 
-            pitch = filter_val(&mut self.filters, "HeadPitch", pitch, h_mc, h_beta);
-            yaw = filter_val(&mut self.filters, "HeadYaw", yaw, h_mc, h_beta);
-            roll = filter_val(&mut self.filters, "HeadRoll", roll, h_mc, h_beta);
-
-            tx = filter_val(&mut self.filters, "HeadX", tx, h_mc, h_beta);
-            ty = filter_val(&mut self.filters, "HeadY", ty, h_mc, h_beta);
-            tz = filter_val(&mut self.filters, "HeadZ", tz, h_mc, h_beta);
+            tx = filter_val("HeadX", tx);
+            ty = filter_val("HeadY", ty);
+            tz = filter_val("HeadZ", tz);
 
             // 4. Anatomical Clamping
             yaw = yaw.clamp(-1.5, 1.5);
@@ -193,6 +311,16 @@ impl Solver {
             params.push(("HeadPos_X".to_string(), tx / 100.0));
             params.push(("HeadPos_Y".to_string(), -ty / 100.0));
             params.push(("HeadPos_Z".to_string(), -tz / 100.0));
+            
+            // Add Head Tracker
+            let head_tracker_pos = Vector3::new(tx / 100.0, -ty / 100.0, -tz / 100.0);
+            let head_tracker_rot = q_final;
+            
+            trackers.push(TrackerData {
+                id: 0,
+                position: [head_tracker_pos.x, head_tracker_pos.y, head_tracker_pos.z],
+                rotation: [head_tracker_rot.i, head_tracker_rot.j, head_tracker_rot.k, head_tracker_rot.w],
+            });
 
             // --- Expressions (Inertia Filtered + Calibrated) ---
             let get_pt = |idx: usize| -> Vector3<f32> {
@@ -202,41 +330,101 @@ impl Solver {
                 } else { Vector3::zeros() }
             };
 
-            // Blink
+            // Blink detection
             let left_ratio = (get_pt(159) - get_pt(145)).norm() / (get_pt(33) - get_pt(133)).norm();
             let right_ratio = (get_pt(386) - get_pt(374)).norm() / (get_pt(362) - get_pt(263)).norm();
             
-            // Apply Neutral Offset if calibrated (Blink neutral is usually ~0.25 open?)
-            // Actually Blink Logic is threshold based. 
-            // Better to calibrate the THRESHOLD?
-            // "Neutral Face" usually means eyes open, mouth closed.
-            // If user has narrow eyes, left_ratio might be 0.2 naturally.
-            // We can adjust threshold based on neutral.
-            // But for now, let's keep hard threshold 0.25 (robust).
-            
-            let raw_blink_l = if left_ratio < 0.25 { 1.0 } else { 0.0 };
-            let raw_blink_r = if right_ratio < 0.25 { 1.0 } else { 0.0 };
+            let real_blink_l = left_ratio < 0.25;
+            let real_blink_r = right_ratio < 0.25;
+            let real_blink_detected = real_blink_l && real_blink_r;
 
-            let inertia_val = |inertias: &mut HashMap<String, InertiaFilter>, name: &str, val: f32, attack: f32, decay: f32| -> f32 {
-                let f = inertias.entry(name.to_string()).or_insert_with(|| InertiaFilter::new(attack, decay));
+            // Saccades (Micro-movements) - subtle overlay on real gaze
+            let (s_pitch, s_yaw) = self.update_saccades();
+
+            // Auto-Blink: fires every 3-7s if no real blink, ~150ms
+            let auto_blink_val = self.update_auto_blink(real_blink_detected);
+
+            let mut inertia_val = |name: &str, val: f32, attack: f32, decay: f32| -> f32 {
+                let f = self.inertia.entry(name.to_string()).or_insert_with(|| InertiaFilter::new(attack, decay));
                 f.filter(val)
             };
 
-            let blink_l = inertia_val(&mut self.inertia, "BlinkL", raw_blink_l, 1.0, 0.2);
-            let blink_r = inertia_val(&mut self.inertia, "BlinkR", raw_blink_r, 1.0, 0.2);
+            // --- Blink Output (real OR auto-blink) ---
+            let raw_blink_l = if real_blink_l { 1.0 } else { auto_blink_val };
+            let raw_blink_r = if real_blink_r { 1.0 } else { auto_blink_val };
+            
+            let blink_l = inertia_val("BlinkL", raw_blink_l, 1.0, 0.2);
+            let blink_r = inertia_val("BlinkR", raw_blink_r, 1.0, 0.2);
             
             params.push(("EyeBlinkLeft".to_string(), blink_l));
             params.push(("EyeBlinkRight".to_string(), blink_r));
 
-            // Saccades (Micro-movements)
-            // User request: "Yeux qui glissent = faux", "Saccades = vivant"
-            let (s_pitch, s_yaw) = self.update_saccades();
+            // --- Gaze Estimation (BUG-03 FIX: real iris + saccade overlay) ---
+            let left_eye_center = (get_pt(33) + get_pt(133)) * 0.5;
+            let right_eye_center = (get_pt(263) + get_pt(362)) * 0.5;
+            let left_iris = (get_pt(159) + get_pt(145)) * 0.5;
+            let right_iris = (get_pt(386) + get_pt(374)) * 0.5;
             
-            // Output Eye transforms (Offsets from Head)
-            // VRChat standard: EyesX, EyesY (-1..1)
-            // We scale our small radian offsets to be visible.
-            params.push(("EyesX".to_string(), s_yaw * 5.0)); 
-            params.push(("EyesY".to_string(), s_pitch * 5.0));
+            let left_eye_width = (get_pt(33) - get_pt(133)).norm().max(0.001);
+            let right_eye_width = (get_pt(263) - get_pt(362)).norm().max(0.001);
+            
+            let gaze_x_l = (left_iris.x - left_eye_center.x) / left_eye_width;
+            let gaze_x_r = (right_iris.x - right_eye_center.x) / right_eye_width;
+            let gaze_y_l = (left_iris.y - left_eye_center.y) / left_eye_width;
+            let gaze_y_r = (right_iris.y - right_eye_center.y) / right_eye_width;
+            
+            // Average both eyes + saccade overlay
+            let raw_eyes_x = ((gaze_x_l + gaze_x_r) * 0.5) * 3.0 + s_yaw * 0.5;
+            let raw_eyes_y = -((gaze_y_l + gaze_y_r) * 0.5) * 3.0 + s_pitch * 0.5;
+
+            // --- Eye Smoothing (OneEuroFilter, light) ---
+            let mut filter_val_eye = |name: &str, val: f32| -> f32 {
+                let f = self.filters.entry(name.to_string())
+                    .or_insert_with(|| OneEuroFilter::new(3.0, 0.005)); // Light: responsive but smooth
+                f.filter(val)
+            };
+            let smooth_eyes_x = filter_val_eye("EyesX", raw_eyes_x);
+            let smooth_eyes_y = filter_val_eye("EyesY", raw_eyes_y);
+
+            // --- Anatomical Clamp (±35° horiz = ±0.58 in -1..1, ±25° vert = ±0.42) ---
+            let eye_clamp_h = 35.0 / 60.0; // ~0.58 in normalized range
+            let eye_clamp_v = 25.0 / 60.0; // ~0.42 in normalized range
+            let eyes_x = smooth_eyes_x.clamp(-eye_clamp_h, eye_clamp_h);
+            let eyes_y = smooth_eyes_y.clamp(-eye_clamp_v, eye_clamp_v);
+            
+            params.push(("EyesX".to_string(), eyes_x)); 
+            params.push(("EyesY".to_string(), eyes_y));
+
+            // --- EyeLook Directional Blendshapes ---
+            // Split EyesX/EyesY into directional params for avatar compatibility
+            // Positive X = looking right (screen), Positive Y = looking up
+            let look_right = eyes_x.max(0.0);  // 0..1
+            let look_left = (-eyes_x).max(0.0);
+            let look_up = eyes_y.max(0.0);
+            let look_down = (-eyes_y).max(0.0);
+            
+            params.push(("EyeLookUpLeft".to_string(), look_up));
+            params.push(("EyeLookUpRight".to_string(), look_up));
+            params.push(("EyeLookDownLeft".to_string(), look_down));
+            params.push(("EyeLookDownRight".to_string(), look_down));
+            params.push(("EyeLookInLeft".to_string(), look_right));   // Left eye looking inward = right
+            params.push(("EyeLookOutLeft".to_string(), look_left));
+            params.push(("EyeLookInRight".to_string(), look_left));   // Right eye looking inward = left
+            params.push(("EyeLookOutRight".to_string(), look_right));
+
+            // --- Head-Eye Coupling ---
+            // When gaze exceeds ~15° (0.25 normalized), head subtly follows
+            let coupling_threshold = 0.25;
+            let coupling_strength = 0.15;
+            if eyes_x.abs() > coupling_threshold {
+                let head_yaw_offset = (eyes_x - eyes_x.signum() * coupling_threshold) * coupling_strength;
+                // Modify head yaw (already output above, so add a correction param)
+                params.push(("HeadYawCoupling".to_string(), head_yaw_offset));
+            }
+            if eyes_y.abs() > coupling_threshold {
+                let head_pitch_offset = (eyes_y - eyes_y.signum() * coupling_threshold) * coupling_strength;
+                params.push(("HeadPitchCoupling".to_string(), head_pitch_offset));
+            }
 
             // Jaw
             let face_h = (get_pt(152) - get_pt(10)).norm();
@@ -249,7 +437,7 @@ impl Solver {
             let raw_jaw = if jaw_ratio > *neutral_jaw { (jaw_ratio - neutral_jaw) * 8.0 } else { 0.0 };
             let raw_jaw = raw_jaw.clamp(0.0, 1.0);
 
-            let jaw = inertia_val(&mut self.inertia, "Jaw", raw_jaw, 0.5, 0.05);
+            let jaw = inertia_val("Jaw", raw_jaw, 0.5, 0.05);
             params.push(("JawOpen".to_string(), jaw));
             
             // Collect Calibration Data
@@ -265,7 +453,7 @@ impl Solver {
         // Helper to get head transform (computed above)
         // We really should store it in struct state or return it from PnP block.
         // It is `self.last_translation` and `self.last_rotation`.
-        let head_pos = self.last_translation.unwrap_or(Vector3::new(0.0, 0.0, 50.0)); // cm
+        let head_pos_m = self.last_translation.unwrap_or(Vector3::new(0.0, 0.0, 50.0)) / 100.0; // cm to m
         let head_rot = self.last_rotation.unwrap_or(UnitQuaternion::identity());
         
         // --- Hand Tracking with IK (Smoothed) ---
@@ -350,25 +538,21 @@ impl Solver {
         // So 2 calls is SAFE.
         
         if let Some(dist) = arm_span {
-             if let Some(new_prof) = self.calibration.update(&cal_face_data, Some(dist)) {
+             if let Some(new_prof) = self.calibration.update(&cal_face_data, Some(dist), &self.user_profile) {
                  println!("[Solver] New Profile Applied!");
                  self.user_profile = new_prof;
                  self.arm_ik = ArmIK::new(self.user_profile.arm_upper_len, self.user_profile.arm_lower_len);
              }
-        } else {
-             if let Some(new_prof) = self.calibration.update(&cal_face_data, None) {
-                 println!("[Solver] New Profile Applied!");
-                 self.user_profile = new_prof;
-                 // Arm lengths might not change if facial calibration, but safe to update or ignore.
-                 // Actually neutral face doesn't affect arm len.
-             }
+        } else if let Some(new_prof) = self.calibration.update(&cal_face_data, None, &self.user_profile) {
+            println!("[Solver] New Profile Applied!");
+            self.user_profile = new_prof;
         }
         
 
 
-        let mut process_hand = |landmarks: &Vec<[f32; 3]>, prefix: &str, is_left: bool| -> Vec<(String, f32)> {
+        let mut process_hand = |landmarks: &Vec<[f32; 3]>, prefix: &str, is_left: bool| -> (Vec<(String, f32)>, Option<TrackerData>) {
             let mut h_params = Vec::new();
-            if landmarks.len() < 21 { return h_params; }
+            if landmarks.len() < 21 { return (h_params, None); }
             
             let get_hvar = |idx: usize| -> Vector3<f32> {
                 let p = landmarks[idx];
@@ -387,7 +571,6 @@ impl Solver {
             let hand_pos_m = Vector3::new(x_hand, y_hand, -z_hand); 
             
             // 2. Estimate Shoulder Logic
-            let head_pos_m = head_pos / 100.0; 
             let sign = if is_left { -1.0 } else { 1.0 };
             let shoulder_offset = Vector3::new(sign * 0.15, -0.25, -0.05);
             let (_r, _p, y_head) = head_rot.euler_angles();
@@ -454,16 +637,21 @@ impl Solver {
             h_params.push((format!("{}Rot_Y", prefix), q.j));
             h_params.push((format!("{}Rot_Z", prefix), q.k));
             h_params.push((format!("{}Rot_W", prefix), q.w));
-
+            
+            // Standard Tracker Data
+            let tracker = TrackerData {
+                id: if is_left { 1 } else { 2 },
+                position: [smooth_hand.x, smooth_hand.y, smooth_hand.z],
+                rotation: [q.i, q.j, q.k, q.w],
+            };
+            
             // Finger Curls
             let calc_curl = |indices: [usize; 4]| -> f32 {
                 let base = get_hvar(indices[0]);
                 let tip = get_hvar(indices[3]);
                 let v_palm = (base - wrist).normalize();
                 let v_finger = (tip - base).normalize();
-                let dot = v_palm.dot(&v_finger); 
-                let val = (1.0 - dot) * 0.7; 
-                val.clamp(0.0, 1.0)
+                ((1.0 - v_palm.dot(&v_finger)) * 0.7).clamp(0.0, 1.0)
             };
             h_params.push((format!("{}Thumb", prefix), calc_curl([1, 2, 3, 4])));
             h_params.push((format!("{}Index", prefix), calc_curl([5, 6, 7, 8])));
@@ -471,21 +659,20 @@ impl Solver {
             h_params.push((format!("{}Ring", prefix), calc_curl([13, 14, 15, 16])));
             h_params.push((format!("{}Pinky", prefix), calc_curl([17, 18, 19, 20])));
 
-            h_params
+            (h_params, Some(tracker))
         };
 
         if let Some(lh) = &data.left_hand_landmarks {
-            params.extend(process_hand(lh, "HandLeft", true));
+            let (p, t) = process_hand(lh, "HandLeft", true);
+            params.extend(p);
+            if let Some(tr) = t { trackers.push(tr); }
         }
         if let Some(rh) = &data.right_hand_landmarks {
-            params.extend(process_hand(rh, "HandRight", false));
+            let (p, t) = process_hand(rh, "HandRight", false);
+            params.extend(p);
+            if let Some(tr) = t { trackers.push(tr); }
         }
 
-        // Filters are already applied in the face logic above (Head/Eyes/Jaw)
-        // Hands might need filtering too, but let's stick to Phase 2 (Face/Head) for now.
-        // If we wanted to filter hands, we'd do it here or inside process_hand.
-        // For now, return params as is.
-
-        params
+        SolverOutput { params, trackers }
     }
 }

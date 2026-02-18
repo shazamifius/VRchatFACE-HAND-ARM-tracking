@@ -38,6 +38,10 @@ pub struct CalibrationManager {
     arm_samples: Vec<f32>, // For Arm Length (dist Shoulder->Hand)
 }
 
+impl Default for CalibrationManager {
+    fn default() -> Self { Self::new() }
+}
+
 impl CalibrationManager {
     pub fn new() -> Self {
         Self {
@@ -64,18 +68,15 @@ impl CalibrationManager {
 
     /// Returns true if calibration is active
     pub fn is_calibrating(&self) -> bool {
-        match self.stage {
-            CalibrationStage::None => false,
-            _ => true,
-        }
+        !matches!(self.stage, CalibrationStage::None)
     }
 
     /// Process calibration frame
-    pub fn update(&mut self, params: &HashMap<String, f32>, arm_span: Option<f32>) -> Option<UserProfile> {
+    pub fn update(&mut self, params: &HashMap<String, f32>, arm_span: Option<f32>, current_profile: &UserProfile) -> Option<UserProfile> {
         if let Some(start) = self.start_time {
             if start.elapsed() > self.duration {
-                // Finish Calibration
-                return self.finish();
+                // Finish Calibration — merge into current profile
+                return self.finish(current_profile);
             }
             
             // Collect Samples
@@ -94,30 +95,23 @@ impl CalibrationManager {
         None
     }
 
-    fn finish(&mut self) -> Option<UserProfile> {
+    fn finish(&mut self, current_profile: &UserProfile) -> Option<UserProfile> {
         println!("[Calibration] Finished!");
-        let mut profile = UserProfile::default(); 
+        // BUG-10 FIX: Clone current profile to preserve existing calibration data
+        let mut profile = current_profile.clone(); 
         
         match self.stage {
             CalibrationStage::NeutralFace | CalibrationStage::CenterGaze => {
-                // Average params
+                // Average params and merge into existing neutral_face
                 let count = self.samples.len() as f32;
                 if count > 0.0 {
                     let mut sums = HashMap::new();
-                    // ... (Sum logic)
                     for s in &self.samples {
                         for (k, v) in s {
                             *sums.entry(k.clone()).or_insert(0.0) += v;
                         }
                     }
-                    // Apply to profile.neutral_face
-                    // Note: CenterGaze should probably update a DIFFERENT map?
-                    // But for now, we merge into neutral_face.
-                    // If we calibrate CenterGaze after NeutralFace, we overwrite?
-                    // Ideally UserProfile should store distinct offsets.
-                    // But for MVP, overwriting or merging into `neutral_face` is okay.
-                    // Actually, if we calibrate Gaze, we only want to update Gaze keys.
-                    // If `params` only has Jaw/Blink, then CenterGaze is redundant for now.
+                    // Merge: only update keys that were actually calibrated
                     for (k, v) in sums {
                         profile.neutral_face.insert(k, v / count);
                     }
@@ -138,6 +132,8 @@ impl CalibrationManager {
         
         self.stage = CalibrationStage::None;
         self.start_time = None;
+        self.samples.clear();
+        self.arm_samples.clear();
         
         Some(profile)
     }

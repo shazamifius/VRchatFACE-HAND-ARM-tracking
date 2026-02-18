@@ -31,6 +31,7 @@ pub struct WebInterface {
     pub input_buffer: Arc<Mutex<Option<Vec<u8>>>>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     pub tx: broadcast::Sender<Vec<u8>>,
+    pub app_handle: Arc<Mutex<Option<AppHandle>>>, // [NEW]
 }
 
 impl WebInterface {
@@ -41,10 +42,16 @@ impl WebInterface {
             input_buffer: Arc::new(Mutex::new(None)),
             shutdown_tx: None,
             tx,
+            app_handle: Arc::new(Mutex::new(None)),
         }
     }
 
     pub async fn start(&mut self, port: u16, app_handle: AppHandle) -> Result<()> {
+        // Store handle for emission
+        if let Ok(mut guard) = self.app_handle.lock() {
+            *guard = Some(app_handle.clone());
+        }
+
         let state = AppState {
             latest_frame: self.latest_frame.clone(),
             input_buffer: self.input_buffer.clone(),
@@ -103,6 +110,15 @@ impl WebInterface {
     pub fn stop(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
+        }
+    }
+
+    // [NEW] Helper to emit tracking data
+    pub fn emit_tracking_data(&self, data: &crate::tracking::types::TrackingData) {
+        if let Ok(guard) = self.app_handle.lock() {
+            if let Some(app) = &*guard {
+                let _ = app.emit("tracking-data", data);
+            }
         }
     }
 }

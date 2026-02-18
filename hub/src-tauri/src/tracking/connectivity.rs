@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use rosc::encoder;
-use rosc::{OscMessage, OscPacket, OscType};
+use rosc::{OscBundle, OscMessage, OscPacket, OscType};
 use std::net::UdpSocket;
 use std::process::{Command, Child, Stdio};
 use std::sync::{Arc, Mutex};
@@ -20,6 +20,7 @@ pub struct ConnectivityManager {
 impl ConnectivityManager {
     pub fn new() -> Result<Self> {
         let osc_socket = UdpSocket::bind("0.0.0.0:0")?; // Bind to any available port
+        osc_socket.set_nonblocking(true).ok(); // Non-blocking for lower latency
         Ok(Self {
             osc_socket,
             osc_target: "127.0.0.1:9000".to_string(), // Default VRChat port
@@ -56,224 +57,236 @@ impl ConnectivityManager {
 
         let packet = OscPacket::Message(msg);
         let msg_buf = encoder::encode(&packet)?;
-        self.osc_socket.send_to(&msg_buf, &self.osc_target)?;
+        // send_to may return WouldBlock on non-blocking socket — ignore
+        let _ = self.osc_socket.send_to(&msg_buf, &self.osc_target);
         Ok(())
     }
 
-    /// Send full tracking data to VRChat
-    pub fn send_tracking_data(&self, face_params: Vec<(String, f32)>) -> Result<()> {
-        // [NEW] Send Activator Params (Once per frame or periodically? Let's just send with frame)
-        // Many systems need a "IsActive" float/bool to transition to the tracking layer.
-        self.send_bool_param("FaceTrackingActive", true);
-        self.send_bool_param("FaceTracking", true);
-        self.send_bool_param("OSC", true);
-        self.send_bool_param("PancakeMode", true); // Often used for Desktop Body Tracking enablement
-        
-        // Flux-Chan Specifics
-        self.send_bool_param("LipTrackingActive", true);
-        self.send_bool_param("EyeTrackingActive", true);
-        self.send_bool_param("FTOn", true);
-        self.send_bool_param("FTOff", false);
-        self.send_bool_param("FacialExpressionsDisabled", false);
+    /// Send an OSC bundle (multiple messages in 1 UDP packet)
+    fn send_osc_bundle(&self, messages: Vec<OscMessage>) -> Result<()> {
+        if messages.is_empty() { return Ok(()); }
+        let packets: Vec<OscPacket> = messages.into_iter()
+            .map(OscPacket::Message)
+            .collect();
+        let bundle = OscBundle {
+            timetag: (0, 1).into(), // Immediate
+            content: packets,
+        };
+        let buf = encoder::encode(&OscPacket::Bundle(bundle))?;
+        let _ = self.osc_socket.send_to(&buf, &self.osc_target);
+        Ok(())
+    }
 
-        // Also send Floats just in case (some avatars use Float 1.0 for TRUE)
-        self.send_avatar_param("FaceTrackingActive", 1.0);
-        self.send_avatar_param("FaceTracking", 1.0);
-        self.send_avatar_param("OSC", 1.0);
-        
-        // [REMOVED] Conflicting Float sends for Lip/EyeTrackingActive (caused trembling)
-        // self.send_avatar_param("LipTrackingActive", 1.0); 
-        // self.send_avatar_param("EyeTrackingActive", 1.0);
-        
-        // self.send_avatar_param("LipTracking", 1.0);
-        // self.send_avatar_param("EyeTracking", 1.0);
-        
-        // [NEW] Force Gesture Control OFF (0.0 often means "Let OSC control it")
-        self.send_avatar_param("LipTracking_GestureControl", 0.0);
-        self.send_avatar_param("EyeTracking_GestureControl", 0.0);
-        
-        // [NEW] Force Gesture Control OFF (0.0 often means "Let OSC control it")
-        // Some systems use 1.0 to ENABLE gestures (overriding OSC). Try 0.0 first.
-        self.send_avatar_param("LipTracking_GestureControl", 0.0);
-        self.send_avatar_param("EyeTracking_GestureControl", 0.0);
+    /// Helper: create a float OSC message
+    fn make_float_msg(addr: &str, value: f32) -> OscMessage {
+        OscMessage { addr: addr.to_string(), args: vec![OscType::Float(value)] }
+    }
+
+    /// Helper: create a bool OSC message  
+    fn make_bool_msg(addr: &str, value: bool) -> OscMessage {
+        OscMessage { addr: addr.to_string(), args: vec![OscType::Bool(value)] }
+    }
+
+    /// Helper: create a multi-float OSC message
+    fn make_vec3_msg(addr: &str, x: f32, y: f32, z: f32) -> OscMessage {
+        OscMessage { addr: addr.to_string(), args: vec![OscType::Float(x), OscType::Float(y), OscType::Float(z)] }
+    }
+
+    /// Send full tracking data to VRChat
+    /// Send full tracking data to VRChat — batched as a single OSC bundle
+    pub fn send_tracking_data(&self, face_params: Vec<(String, f32)>) -> Result<()> {
+        let mut msgs: Vec<OscMessage> = Vec::with_capacity(80);
+
+        // Activator Params
+        msgs.push(Self::make_bool_msg("/avatar/parameters/FaceTrackingActive", true));
+        msgs.push(Self::make_bool_msg("/avatar/parameters/FaceTracking", true));
+        msgs.push(Self::make_bool_msg("/avatar/parameters/OSC", true));
+        msgs.push(Self::make_bool_msg("/avatar/parameters/PancakeMode", true));
+        msgs.push(Self::make_bool_msg("/avatar/parameters/LipTrackingActive", true));
+        msgs.push(Self::make_bool_msg("/avatar/parameters/EyeTrackingActive", true));
+        msgs.push(Self::make_bool_msg("/avatar/parameters/FTOn", true));
+        msgs.push(Self::make_bool_msg("/avatar/parameters/FTOff", false));
+        msgs.push(Self::make_bool_msg("/avatar/parameters/FacialExpressionsDisabled", false));
+        msgs.push(Self::make_float_msg("/avatar/parameters/FaceTrackingActive", 1.0));
+        msgs.push(Self::make_float_msg("/avatar/parameters/FaceTracking", 1.0));
+        msgs.push(Self::make_float_msg("/avatar/parameters/OSC", 1.0));
+        msgs.push(Self::make_float_msg("/avatar/parameters/LipTracking_GestureControl", 0.0));
+        msgs.push(Self::make_float_msg("/avatar/parameters/EyeTracking_GestureControl", 0.0));
 
         let mut head_pos = Vector3::new(0.0, 0.0, 0.0);
-        let mut head_rot = Vector3::new(0.0, 0.0, 0.0); // Pitch, Yaw, Roll
-        
+        let mut head_rot = Vector3::new(0.0, 0.0, 0.0);
         let mut left_hand_pos = Vector3::new(0.0, 0.0, 0.0);
-        let mut _left_hand_rot_q = (0.0, 0.0, 0.0, 1.0); // x,y,z,w
         let mut right_hand_pos = Vector3::new(0.0, 0.0, 0.0);
-        let mut _right_hand_rot_q = (0.0, 0.0, 0.0, 1.0);
-
         let mut has_head = false;
         let mut has_head_pos = false;
         let mut has_left_hand = false;
         let mut has_right_hand = false;
 
-
-
-        // [NEW] Smart Eyes: Check Brows first
-        let mut brow_max_open = 0.8; 
+        // Smart Eyes: Check Brows first
+        let mut brow_max_open = 0.8;
         for (p, v) in &face_params {
             if p == "BrowInnerUp" || p.starts_with("BrowOuterUp") {
-                // If brows are UP (1.0), allow eyes to open to 1.0 (Surprise).
-                // If brows are DOWN (0.0), max is 0.8 (Normal).
                 let intent = 0.8 + (0.2 * v);
                 if intent > brow_max_open { brow_max_open = intent; }
             }
         }
 
+        // Helper: push avatar param message
+        let avatar_msg = |name: &str, val: f32| -> OscMessage {
+            Self::make_float_msg(&format!("/avatar/parameters/{}", name), val)
+        };
+
         for (param, value) in face_params {
-             // System Rotations handling
+            // Skip system-internal params
             if param.starts_with("SYS_HEAD_ROT_") { continue; }
-            if param.starts_with("HandLeftRot_") { continue; } 
+            if param.starts_with("HandLeftRot_") { continue; }
             if param.starts_with("HandRightRot_") { continue; }
-
-
 
             // Head Aggregation
             if param == "HeadPos_X" { head_pos.x = value; has_head_pos = true; continue; }
             if param == "HeadPos_Y" { head_pos.y = value; has_head_pos = true; continue; }
             if param == "HeadPos_Z" { head_pos.z = value; has_head_pos = true; continue; }
-            
             if param == "HeadYaw" { head_rot.y = value; has_head = true; }
             if param == "HeadPitch" { head_rot.x = value; has_head = true; }
             if param == "HeadRoll" { head_rot.z = value; has_head = true; }
+            if param == "HeadYawCoupling" { head_rot.y += value; has_head = true; continue; }
+            if param == "HeadPitchCoupling" { head_rot.x += value; has_head = true; continue; }
 
-            // Hand Left Aggregation
+            // Hand Aggregation
             if param == "HandLeftPos_X" { left_hand_pos.x = value; has_left_hand = true; continue; }
             if param == "HandLeftPos_Y" { left_hand_pos.y = value; has_left_hand = true; continue; }
             if param == "HandLeftPos_Z" { left_hand_pos.z = value; has_left_hand = true; continue; }
-            if param == "HandLeftRot_X" { _left_hand_rot_q.0 = value; has_left_hand = true; continue; }
-            if param == "HandLeftRot_Y" { _left_hand_rot_q.1 = value; has_left_hand = true; continue; }
-            if param == "HandLeftRot_Z" { _left_hand_rot_q.2 = value; has_left_hand = true; continue; }
-            if param == "HandLeftRot_W" { _left_hand_rot_q.3 = value; has_left_hand = true; continue; }
-
-            // Hand Right Aggregation
             if param == "HandRightPos_X" { right_hand_pos.x = value; has_right_hand = true; continue; }
             if param == "HandRightPos_Y" { right_hand_pos.y = value; has_right_hand = true; continue; }
             if param == "HandRightPos_Z" { right_hand_pos.z = value; has_right_hand = true; continue; }
-            if param == "HandRightRot_X" { _right_hand_rot_q.0 = value; has_right_hand = true; continue; }
-            if param == "HandRightRot_Y" { _right_hand_rot_q.1 = value; has_right_hand = true; continue; }
-            if param == "HandRightRot_Z" { _right_hand_rot_q.2 = value; has_right_hand = true; continue; }
-            if param == "HandRightRot_W" { _right_hand_rot_q.3 = value; has_right_hand = true; continue; }
 
-            // Hand Fingers Mapping
+            // Hand Fingers
             if param.starts_with("HandLeft") || param.starts_with("HandRight") {
-                 let digit = param.replace("HandLeft", "").replace("HandRight", ""); // Index, Middle...
-                 let side = if param.contains("Left") { "Left" } else { "Right" };
-                 
-                 // Skip Pos/Rot if they slipped through (handled above normally)
-                 if digit.starts_with("Pos") || digit.starts_with("Rot") { continue; }
-
-                 let g_param = format!("Gesture{}{}", side, digit);
-                 self.send_avatar_param(&g_param, value);
-                 continue; // Done with this param
+                let digit = param.replace("HandLeft", "").replace("HandRight", "");
+                let side = if param.contains("Left") { "Left" } else { "Right" };
+                if digit.starts_with("Pos") || digit.starts_with("Rot") { continue; }
+                msgs.push(avatar_msg(&format!("Gesture{}{}", side, digit), value));
+                continue;
             }
 
-            // Standard Params (Face)
-            let addr = format!("/avatar/parameters/{}", param);
-            let _ = self.send_osc(&addr, vec![OscType::Float(value)]);
+            // Standard Face Param
+            msgs.push(Self::make_float_msg(&format!("/avatar/parameters/{}", param), value));
 
-            // Aliases & Unified Expressions (UE) Support
-             if param == "JawOpen" {
-                self.send_avatar_param("MouthOpen", value);
-                self.send_avatar_param("Voice", value); 
-                self.send_avatar_param("vrc_MouthOpen", value);
-                self.send_avatar_param("Aperture", value);
-                // UE / FT variants
-                self.send_avatar_param("jawOpen", value); 
-                self.send_avatar_param("mouthOpen", value);
-                // Native
-                self.send_avatar_param("VRCFaceBlendShape_JawOpen", value);
-                // FT V2 (Flux-Chan)
-                self.send_avatar_param("FT/v2/JawOpen", value);
-                
-                // [NEW] Honey-Ichigo / Standard Viseme
-                self.send_avatar_param("Voice", value);
+            // Aliases & Unified Expressions
+            if param == "JawOpen" {
+                msgs.push(avatar_msg("MouthOpen", value));
+                msgs.push(avatar_msg("Voice", value));
+                msgs.push(avatar_msg("vrc_MouthOpen", value));
+                msgs.push(avatar_msg("Aperture", value));
+                msgs.push(avatar_msg("jawOpen", value));
+                msgs.push(avatar_msg("mouthOpen", value));
+                msgs.push(avatar_msg("VRCFaceBlendShape_JawOpen", value));
+                msgs.push(avatar_msg("FT/v2/JawOpen", value));
             }
-            
-            // [NEW] Honey-Ichigo OSCm
             if param == "CheekPuff" {
-                self.send_avatar_param("CheekPuff", value);
-                self.send_avatar_param("OSCm/BlendSetRight", value);
-                self.send_avatar_param("OSCm/BlendSetLeft", value);
-                // FT V2
-                self.send_avatar_param("FT/v2/CheekPuff", value);
+                msgs.push(avatar_msg("CheekPuff", value));
+                msgs.push(avatar_msg("OSCm/BlendSetRight", value));
+                msgs.push(avatar_msg("OSCm/BlendSetLeft", value));
+                msgs.push(avatar_msg("FT/v2/CheekPuff", value));
             }
-            
             if param == "EyeBlinkLeft" {
-                 self.send_avatar_param("BlinkLeft", value);
-                 self.send_avatar_param("EyeOpenLeft", 1.0 - value); 
-                 self.send_avatar_param("EyesClosed", value);
-                 // UE
-                 self.send_avatar_param("eyeClosedLeft", value);
-                 self.send_avatar_param("blinkLeft", value);
-                 // PascalCase / Legacy support
-                 self.send_avatar_param("EyeClosedLeft", value);
-                 // Native
-                 self.send_avatar_param("VRCFaceBlendShape_EyeBlinkLeft", value);
-                 // FT V2 (Inverted & Scaled Dynamically)
-                 // 1.0 is often "Wide Open / Surprise". 0.8 is usually "Normal".
-                 self.send_avatar_param("FT/v2/EyeLidLeft", (1.0 - value) * brow_max_open); 
+                msgs.push(avatar_msg("BlinkLeft", value));
+                msgs.push(avatar_msg("EyeOpenLeft", 1.0 - value));
+                msgs.push(avatar_msg("EyesClosed", value));
+                msgs.push(avatar_msg("eyeClosedLeft", value));
+                msgs.push(avatar_msg("blinkLeft", value));
+                msgs.push(avatar_msg("EyeClosedLeft", value));
+                msgs.push(avatar_msg("VRCFaceBlendShape_EyeBlinkLeft", value));
+                msgs.push(avatar_msg("FT/v2/EyeLidLeft", (1.0 - value) * brow_max_open));
             }
             if param == "EyeBlinkRight" {
-                 self.send_avatar_param("BlinkRight", value);
-                 self.send_avatar_param("EyeOpenRight", 1.0 - value); 
-                 // UE
-                 self.send_avatar_param("eyeClosedRight", value);
-                 self.send_avatar_param("blinkRight", value);
-                 // PascalCase / Legacy support
-                 self.send_avatar_param("EyeClosedRight", value);
-                 // Native
-                 self.send_avatar_param("VRCFaceBlendShape_EyeBlinkRight", value);
-                 // FT V2 (Inverted & Scaled Dynamically)
-                 self.send_avatar_param("FT/v2/EyeLidRight", (1.0 - value) * brow_max_open);
+                msgs.push(avatar_msg("BlinkRight", value));
+                msgs.push(avatar_msg("EyeOpenRight", 1.0 - value));
+                msgs.push(avatar_msg("eyeClosedRight", value));
+                msgs.push(avatar_msg("blinkRight", value));
+                msgs.push(avatar_msg("EyeClosedRight", value));
+                msgs.push(avatar_msg("VRCFaceBlendShape_EyeBlinkRight", value));
+                msgs.push(avatar_msg("FT/v2/EyeLidRight", (1.0 - value) * brow_max_open));
+            }
+            if param.starts_with("EyeLook") {
+                msgs.push(avatar_msg(&format!("VRCFaceBlendShape_{}", param), value));
+                msgs.push(avatar_msg(&format!("FT/v2/{}", param), value));
+                let lower = param[0..1].to_lowercase() + &param[1..];
+                msgs.push(avatar_msg(&lower, value));
             }
         }
 
-        // Send Head Tracker
+        // Head Tracker messages
         if has_head {
-             let pitch_deg = head_rot.x * 57.2958; 
-             let yaw_deg = head_rot.y * 57.2958;
-             let roll_deg = head_rot.z * 57.2958;
-             
-             let _ = self.send_osc("/tracking/trackers/head/rotation", vec![
-                 OscType::Float(pitch_deg),
-                 OscType::Float(yaw_deg),
-                 OscType::Float(roll_deg)
-             ]);
-             
-             if has_head_pos {
-                 let _ = self.send_osc("/tracking/trackers/head/position", vec![
-                     OscType::Float(head_pos.x),
-                     OscType::Float(head_pos.y),
-                     OscType::Float(head_pos.z)
-                 ]);
-             }
-
-             // Also Generic Head Inputs (for non-FBT)
-             let _ = self.send_osc("/input/HeadPitch", vec![OscType::Float(head_rot.x)]);
-             let _ = self.send_osc("/input/HeadYaw", vec![OscType::Float(head_rot.y)]);
-             let _ = self.send_osc("/input/HeadRoll", vec![OscType::Float(head_rot.z)]);
+            let pitch_deg = head_rot.x * 57.2958;
+            let yaw_deg = head_rot.y * 57.2958;
+            let roll_deg = head_rot.z * 57.2958;
+            msgs.push(Self::make_vec3_msg("/tracking/trackers/head/rotation", pitch_deg, yaw_deg, roll_deg));
+            if has_head_pos {
+                msgs.push(Self::make_vec3_msg("/tracking/trackers/head/position", head_pos.x, head_pos.y, head_pos.z));
+            }
+            msgs.push(Self::make_float_msg("/input/HeadPitch", head_rot.x));
+            msgs.push(Self::make_float_msg("/input/HeadYaw", head_rot.y));
+            msgs.push(Self::make_float_msg("/input/HeadRoll", head_rot.z));
         }
 
-        // Send Hand Trackers
+        // Hand Tracker messages
         if has_left_hand {
-             let _ = self.send_osc("/tracking/trackers/1/position", vec![
-                 OscType::Float(left_hand_pos.x),
-                 OscType::Float(left_hand_pos.y),
-                 OscType::Float(left_hand_pos.z)
-             ]);
+            msgs.push(Self::make_vec3_msg("/tracking/trackers/1/position", left_hand_pos.x, left_hand_pos.y, left_hand_pos.z));
         }
         if has_right_hand {
-             let _ = self.send_osc("/tracking/trackers/2/position", vec![
-                 OscType::Float(right_hand_pos.x),
-                 OscType::Float(right_hand_pos.y),
-                 OscType::Float(right_hand_pos.z)
-             ]);
+            msgs.push(Self::make_vec3_msg("/tracking/trackers/2/position", right_hand_pos.x, right_hand_pos.y, right_hand_pos.z));
         }
-        
+
+        // Send everything as a single bundle
+        self.send_osc_bundle(msgs)
+    }
+
+    pub fn send_tracker_data(&self, trackers: Vec<crate::tracking::solver::TrackerData>) -> Result<()> {
+        for tracker in trackers {
+            let id = tracker.id;
+            // VRChat Tracker Endpoints:
+            // /tracking/trackers/{id}/position (x, y, z)
+            // /tracking/trackers/{id}/rotation (x, y, z) [Euler Degrees]
+            
+            let pos_addr = if id == 0 {
+                "/tracking/trackers/head/position".to_string()
+            } else {
+                format!("/tracking/trackers/{}/position", id)
+            };
+
+            let rot_addr = if id == 0 {
+                "/tracking/trackers/head/rotation".to_string()
+            } else {
+                format!("/tracking/trackers/{}/rotation", id)
+            };
+
+            // Send Position
+            let _ = self.send_osc(&pos_addr, vec![
+                OscType::Float(tracker.position[0]),
+                OscType::Float(tracker.position[1]),
+                OscType::Float(tracker.position[2]),
+            ]);
+
+            // Send Rotation (Convert Quat to Euler Degrees)
+            let q = nalgebra::UnitQuaternion::new_normalize(nalgebra::Quaternion::new(
+                tracker.rotation[3], // w
+                tracker.rotation[0], // x
+                tracker.rotation[1], // y
+                tracker.rotation[2]  // z
+            ));
+            let (roll, pitch, yaw) = q.euler_angles();
+            // Degrees
+            let rx = pitch * 57.2958;
+            let ry = yaw * 57.2958;
+            let rz = roll * 57.2958;
+
+            let _ = self.send_osc(&rot_addr, vec![
+                OscType::Float(rx),
+                OscType::Float(ry),
+                OscType::Float(rz),
+            ]);
+        }
         Ok(())
     }
 

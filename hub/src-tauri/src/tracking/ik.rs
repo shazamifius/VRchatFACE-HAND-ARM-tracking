@@ -72,8 +72,6 @@ impl ArmIK {
         let upper_arm_dir = rot_mat * dir;
         
         // Elbow Pos = Shoulder + UpperArmDir * UpperLen
-        let elbow = shoulder + upper_arm_dir * self.upper_arm_len;
-        
-        elbow
+        shoulder + upper_arm_dir * self.upper_arm_len
     }
 }

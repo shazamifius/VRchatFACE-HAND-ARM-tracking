@@ -47,7 +47,7 @@ impl OscBridge {
     }
 }
 
-fn handle_packet(packet: OscPacket, callback: &Box<dyn Fn(String, Vec<f32>) + Send + Sync>) {
+fn handle_packet(packet: OscPacket, callback: &(dyn Fn(String, Vec<f32>) + Send + Sync)) {
     match packet {
         OscPacket::Message(msg) => {
             handle_message(msg, callback);
@@ -60,7 +60,7 @@ fn handle_packet(packet: OscPacket, callback: &Box<dyn Fn(String, Vec<f32>) + Se
     }
 }
 
-fn handle_message(msg: OscMessage, callback: &Box<dyn Fn(String, Vec<f32>) + Send + Sync>) {
+fn handle_message(msg: OscMessage, callback: &(dyn Fn(String, Vec<f32>) + Send + Sync)) {
     // We expect addresses like /tracking/face/landmarks
     // And args to be a list of Floats
     

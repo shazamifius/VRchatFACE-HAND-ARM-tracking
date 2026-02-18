@@ -34,7 +34,7 @@ impl BlazeLandmark {
         yc: f32, 
         scale: f32, 
         theta: f32
-    ) -> Result<(Vec<(f32, f32, f32)>, f32)> { // (Keypoints (x,y,z), Score)
+    ) -> Result<(Vec<(f32, f32, f32)>, f32, Option<f32>)> { // (Keypoints, Score, Handedness?)
         
         // 1. Extract ROI
         let roi_img = extract_roi(image, xc, yc, theta, scale, (self.input_size.0 as u32, self.input_size.1 as u32));
@@ -62,14 +62,8 @@ impl BlazeLandmark {
 
         // 4. Extract
         // Output indices:
-        // Face Mesh: 
-        // 0: landmarks (1, 1404) -> 468 * 3
-        // 1: flag (1, 1) -> Score
-        
-        // Hand:
-        // 0: landmarks (1, 63) -> 21 * 3
-        // 1: flag (1, 1)
-        // 2: handedness (1, 1)
+        // Face Mesh (2 outputs): landmarks, score
+        // Hand (3 outputs): landmarks, score, handedness
         
         // We try to find tensor by shape or index
         // Let's assume index 0 is landmarks, index 1 is score.
@@ -80,8 +74,16 @@ impl BlazeLandmark {
 
         let (_shape_lm, landmarks_slice) = outputs[0].try_extract_tensor::<f32>()?;
         let (_shape_score, score_slice) = outputs[1].try_extract_tensor::<f32>()?; // flag
-
         let score_val = score_slice[0];
+
+        let mut handedness_val = None;
+        if outputs.len() >= 3 {
+             if let Ok((_shape_h, h_slice)) = outputs[2].try_extract_tensor::<f32>() {
+                 if !h_slice.is_empty() {
+                    handedness_val = Some(h_slice[0]);
+                 }
+             }
+        }
 
         // 5. Denormalize
         // Landmarks are typically normalized 0..resolution
@@ -99,12 +101,15 @@ impl BlazeLandmark {
         
         for i in 0..self.num_landmarks {
             let offset = i * self.num_dims;
-            let lx = landmarks_slice[offset];
-            let ly = landmarks_slice[offset+1];
-            let lz = if self.num_dims > 2 { landmarks_slice[offset+2] } else { 0.0 };
-            
-            landmarks_roi_2d.push((lx, ly));
-            z_coords.push(lz);
+            // Check bounds to be safe
+            if offset + 1 < landmarks_slice.len() {
+                let lx = landmarks_slice[offset];
+                let ly = landmarks_slice[offset+1];
+                let lz = if self.num_dims > 2 && offset + 2 < landmarks_slice.len() { landmarks_slice[offset+2] } else { 0.0 };
+                
+                landmarks_roi_2d.push((lx, ly));
+                z_coords.push(lz);
+            }
         }
 
         let landmarks_orig_2d = denormalize_landmarks(
@@ -129,6 +134,6 @@ impl BlazeLandmark {
             final_landmarks.push((*ox, *oy, oz));
         }
 
-        Ok((final_landmarks, score_val))
+        Ok((final_landmarks, score_val, handedness_val))
     }
 }

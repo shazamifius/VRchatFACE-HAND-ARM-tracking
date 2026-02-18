@@ -1,44 +1,10 @@
 use nalgebra::{Vector2, Vector3, UnitQuaternion, Vector6, Matrix6};
 
-/// Canonical 3D Face Model (in arbitrary units, e.g. cm)
-/// Based on standard anthropometric data (approximate)
-/// Coordinate System: Right-Handed
-/// X: Right (Viewer's Right, Subject's Left)
-/// Y: Up
-/// Z: Back (Towards Camera is +Z? No, standard OpenGL camera looks down -Z. 
-/// But usually in PnP, Object coordinates are defined, and we find T such that P_cam = R * P_obj + T)
-/// Let's define Object Space:
-/// Nose Tip: 0, 0, 0
-/// Eyes: Y is up ~3-4 units. X is +/- 3 units. Z is back ~3-4 units.
+/// Canonical 3D Face Model (in cm)
+/// Coordinate System: Right-Handed, Face looking at camera
+/// X+ = Screen Right (Face's Left), Y+ = Up, Z+ = Towards Camera
 pub fn get_canonical_metric_landmarks() -> Vec<(usize, Vector3<f32>)> {
     vec![
-        (1,   Vector3::new(0.0, 0.0, 0.0)),    // Nose Tip
-        (33,  Vector3::new(-3.2, 2.0, -3.0)),  // Left Eye Outer (Subject's Left = -X in Face Space if we want mirror? No, let's Stick to standard RHS: X Right, Y Up, Z Back)
-                                               // WAIT. If X is Right, and Left Eye is Subject Left...
-                                               // Subject Left is Viewer Right? 
-                                               // Let's assume standard "Face looking at you":
-                                               // X+ is Your Right (Face's Left)
-                                               // Y+ is Up
-                                               // Z+ is Towards You (Nose sticks out)
-                                               
-                                               // Nose: 0,0,0
-        // Left Eye (idx 33): is on the LEFT of the image (if mirrored) or RIGHT (if webcam)?
-        // MediaPipe: x starts 0 (left) to 1 (right). 
-        // 33 is Left Eye (Viewer's Left, Subject's Right).
-        // 263 is Right Eye (Viewer's Right, Subject's Left).
-        
-        // Let's target "Mirror Mode" which is standard for VRChat.
-        // User moves Head Left -> Avatar moves Head Left.
-        // If I move head Left (screen left), my nose x decreases.
-        // So Screen X+ is Right.
-        
-        // 3D Model: 
-        // 33 (Left Eye):  X = -3.2
-        // 263 (Right Eye): X = 3.2
-        
-        // Z: Eyes are behind nose. Nose 0. Eyes -3.0.
-        // Y: Eyes are above nose. +2.0.
-        
         (1,   Vector3::new(0.0, 0.0, 0.0)),              // Nose Tip
         (33,  Vector3::new(-4.8, 3.0, -4.5)),            // Left Eye Outer (Screen Left)
         (263, Vector3::new(4.8, 3.0, -4.5)),             // Right Eye Outer (Screen Right)
@@ -49,13 +15,11 @@ pub fn get_canonical_metric_landmarks() -> Vec<(usize, Vector3<f32>)> {
     ]
 }
 
-/// Project 3D point to 2D
+/// Project 3D point to 2D screen coordinates
 pub fn project(p_cam: Vector3<f32>, focal_length: f32, center: Vector2<f32>) -> Vector2<f32> {
     if p_cam.z.abs() < 0.001 { return center; }
     let u = (p_cam.x / p_cam.z) * focal_length + center.x;
-    let v = (-p_cam.y / p_cam.z) * focal_length + center.y; // Y is inverted in screen space (Down is +)
-    // Wait, if Camera Y+ is Up, and Screen Y+ is Down.
-    // p_cam.y / p_cam.z * f is "Normalized Y". Make it negative for screen.
+    let v = (-p_cam.y / p_cam.z) * focal_length + center.y; // Y inverted: screen Y+ is Down
     Vector2::new(u, v)
 }
 
@@ -67,7 +31,7 @@ pub fn project(p_cam: Vector3<f32>, focal_length: f32, center: Vector2<f32>) -> 
 /// 
 /// Returns: (Rotation Quaternion, Translation Vector)
 pub fn solve_pnp(
-    image_points: &Vec<(usize, Vector2<f32>)>, 
+    image_points: &[(usize, Vector2<f32>)], 
     last_rotation: Option<UnitQuaternion<f32>>,
     last_translation: Option<Vector3<f32>>,
     focal_length: f32,
@@ -93,8 +57,9 @@ pub fn solve_pnp(
         return (q, t); // Not enough points
     }
 
-    // Iterations
-    let iterations = 5; 
+    // Iterations (20 is enough for Gauss-Newton on a well-conditioned problem)
+    let iterations = 20; 
+    let mut lambda: f32 = 1.0; // Levenberg-Marquardt damping (adaptive)
     
     for _ in 0..iterations {
         // Build Jacobian Matrix J (2N x 6) and Residual Vector r (2N)
@@ -157,16 +122,6 @@ pub fn solve_pnp(
             
             let x = p_cam.x;
             let y = p_cam.y;
-            // let z = p_cam.z;
-            
-            // Row u
-            // du/d_wx = du/dx * 0 + du/dy * z + du/dz * (-y) = 0 + 0 + (-x*f/Z^2) * (-y) = x*y*f/Z^2
-            // du/d_wy = du/dx * (-z) + du/dy * 0 + du/dz * x = (f/Z)*(-z) + 0 + (-x*f/Z^2)*x = -f - x^2*f/Z^2
-            // du/d_wz = du/dx * y + du/dy * (-x) + du/dz * 0 = (f/Z)*y
-            
-            // du/d_tx = f/Z
-            // du/d_ty = 0
-            // du/d_tz = -x*f/Z^2
             
             let row_u = Vector6::new(
                 (f * x * y) * z_sq_inv,       // wx
@@ -177,32 +132,14 @@ pub fn solve_pnp(
                 -f * x * z_sq_inv             // tz
             );
 
-            // Row v
-            // dv/d_wx = dv/dx * 0 + dv/dy * z + dv/dz * (-y) = (-f/Z)*z + (y*f/Z^2)*(-y) = -f - y^2*f/Z^2
-            // dv/d_wy = dv/dx * (-z) + dv/dy * 0 + dv/dz * x = (-f/Z)*0 + (y*f/Z^2)*x = x*y*f/Z^2
-            // dv/d_wz = dv/dx * y + dv/dy * (-x) + dv/dz * 0 = (-f/Z)*(-x) = f*x/Z
-            
             let row_v = Vector6::new(
                 -f - (f * y * y) * z_sq_inv,  // wx
                 (f * x * y) * z_sq_inv,       // wy
-                x * f * z_inv,                // wz (Wait, dv_dx=0. dv_dy=-f/z. dv_dz=yf/z^2.
-                                              // d/d_wz: P_cam' = [-y, x, 0].
-                                              // dv/d_wz = dv/dx(-y) + dv/dy(x) + dv/dz(0)
-                                              // = 0 + (-f/z)*(x) = -fx/z. 
-                                              // My manual derivation above was `(-f/Z)*(-x)` which is `fx/z`.
-                                              // Let's recheck J_geo row 2 (y): z, 0, -x. 
-                                              // P_new_y = z*wx + 0*wy - x*wz.
-                                              // So dPy/d_wz = -x. Correct.
-                                              // dv/d_Py = -f/Z.
-                                              // So term is (-f/Z) * (-x) = f*x/Z. Correct.
+                x * f * z_inv,                // wz
                 0.0,                          // tx
                 -f * z_inv,                   // ty
                 f * y * z_sq_inv              // tz
             );
-            
-            // Update Hessian
-            // J = [row_u; row_v]
-            // J^T * J = row_u^T * row_u + row_v^T * row_v
             
             // Outer product manually
             for i in 0..6 {
@@ -216,8 +153,8 @@ pub fn solve_pnp(
         if total_err < 0.1 { break; } // Converged
         
         // Solve Linear System (JT_J * delta = JT_r)
-        // Add minimal damping (Levenberg)
-        for i in 0..6 { jt_j[(i,i)] += 0.001; }
+        // Levenberg-Marquardt damping (adaptive)
+        for i in 0..6 { jt_j[(i,i)] += lambda; }
         
         match jt_j.try_inverse() {
             Some(inv) => {
@@ -225,8 +162,14 @@ pub fn solve_pnp(
                 
                 // Update State
                 // delta = [wx, wy, wz, tx, ty, tz]
-                let w = Vector3::new(delta[0], delta[1], delta[2]);
-                let v = Vector3::new(delta[3], delta[4], delta[5]);
+                let mut w = Vector3::new(delta[0], delta[1], delta[2]);
+                let mut v = Vector3::new(delta[3], delta[4], delta[5]);
+                
+                // Clamp step size to prevent divergence
+                let w_norm = w.norm();
+                if w_norm > 0.5 { w *= 0.5 / w_norm; } // max 0.5 rad per step
+                let v_norm = v.norm();
+                if v_norm > 20.0 { v *= 20.0 / v_norm; } // max 20cm per step
                 
                 // Update Rotation: q_new = exp(w) * q_old
                 // nalgebra UnitQuaternion::new(w) creates exp(w/2) kind of?
@@ -243,8 +186,14 @@ pub fn solve_pnp(
                 // The Jacobian above dProject/dT assumed T is simply added to P_cam.
                 // So v is additive to t.
                 t += v;
+                
+                // Reduce damping on successful step
+                lambda *= 0.5;
+                lambda = lambda.max(0.001);
             },
-            None => break, // Singular
+            None => {
+                lambda *= 2.0; // Increase damping if singular
+            }
         }
     }
     

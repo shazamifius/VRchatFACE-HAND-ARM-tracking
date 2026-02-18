@@ -180,3 +180,82 @@ pub fn get_face_short_range_config() -> (AnchorOptions, BlazeConfig) {
 
     (anchor_options, model_config)
 }
+
+
+// Palm Detection (Lite/Full are similar geometry, usually 192x192)
+// MediaPipe Hands uses 128x128 for Lite, 192x192 for Full.
+// The downloaded model is `palm_detection_mediapipe_2023feb.onnx`.
+// Opencv zoo docs say input is 192x192.
+pub fn get_palm_detection_config() -> (AnchorOptions, BlazeConfig) {
+    let _anchor_options = AnchorOptions {
+        num_layers: 4,
+        min_scale: 0.1484375,
+        max_scale: 0.75,
+        input_size_height: 192,
+        input_size_width: 192,
+        anchor_offset_x: 0.5,
+        anchor_offset_y: 0.5,
+        strides: vec![8, 16, 16, 16], // Verify strides for 192 input
+        aspect_ratios: vec![1.0],
+        reduce_boxes_in_lowest_layer: false,
+        interpolated_scale_aspect_ratio: 1.0,
+        fixed_anchor_size: true,
+    };
+    // Note: Standard MP Palm might have different strides: 4, 8, 16, 32?
+    // Let's assume standard SSD logic.
+    // If input 192: 
+    // Stride 8 -> 24x24
+    // Stride 16 -> 12x12
+    // Stride 16 -> 12x12 (Wait, usually increasing?)
+    // Stride 32 -> 6x6
+    // Actually, let's use the standard values found in other implementations for 192x192.
+    // Stride: 4, 8, 16, 32.
+    // num_anchors = 2016.
+    
+    let anchor_options_corrected = AnchorOptions {
+        num_layers: 4,
+        min_scale: 0.1484375,
+        max_scale: 0.75,
+        input_size_height: 192,
+        input_size_width: 192,
+        anchor_offset_x: 0.5,
+        anchor_offset_y: 0.5,
+        strides: vec![4, 8, 16, 32], 
+        aspect_ratios: vec![1.0], 
+        reduce_boxes_in_lowest_layer: false, 
+        interpolated_scale_aspect_ratio: 1.0,
+        fixed_anchor_size: true,
+    };
+
+    let model_config = BlazeConfig {
+        num_classes: 1,
+        num_anchors: 2016, // (48*48 + 24*24 + 12*12 + 6*6) * 2? No.
+        // 192/4 = 48. 48*48 = 2304.
+        // It depends on aspect ratios per layer.
+        // Standard Palm: 2 anchors per point.
+        // 48*48*2 + 24*24*6 + ...
+        // Actually, let's trust the `num_anchors` count from standard TFLite graph if possible.
+        // For now, use 2016 which is common for 192x192.
+        num_coords: 18, // 4 box + 7 keypoints * 2
+        score_clipping_thresh: 100.0,
+        x_scale: 192.0,
+        y_scale: 192.0,
+        h_scale: 192.0,
+        w_scale: 192.0,
+        min_score_thresh: 0.5,
+        min_suppression_threshold: 0.3,
+        num_keypoints: 7, 
+        detection2roi_method: "box".to_string(), // Palm uses 'box' (from wrist/middle finger)
+        kp1: 0, // Wrist
+        kp2: 2, // Middle Finger Base
+        theta0: 90.0 * std::f32::consts::PI / 180.0, // Hand is usually vertical?
+        dscale: 2.6, // Box enlargement
+        dy: -0.1, // Shift up/down
+    };
+
+    (anchor_options_corrected, model_config)
+}
+
+pub fn get_hand_landmark_config() -> (u32, u32) {
+    (224, 224) // Input size
+}

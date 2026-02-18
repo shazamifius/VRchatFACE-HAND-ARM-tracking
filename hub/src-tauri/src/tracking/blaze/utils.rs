@@ -345,7 +345,7 @@ fn intersection_over_union(a: &Detection, b: &Detection) -> f32 {
 
 /// Convert landmarks from ROI coordinates back to original image coordinates
 pub fn denormalize_landmarks(
-    landmarks_roi: &Vec<(f32, f32)>, // (x, y) in 0..resolution
+    landmarks_roi: &[(f32, f32)], // (x, y) in 0..resolution
     xc: f32,
     yc: f32,
     theta: f32,

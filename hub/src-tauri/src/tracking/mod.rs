@@ -16,7 +16,10 @@ pub mod filter;
 pub mod pnp;
 pub mod smoothing;
 pub mod ik;
-pub mod calibration; // [NEW] // [NEW] // [NEW] // [NEW]
+pub mod calibration;
+
+#[cfg(test)]
+mod tests;
 
 use self::camera::CameraManager;
 use self::ai::InferenceEngine;
@@ -37,6 +40,10 @@ pub struct TrackingEngine {
     pub data: Arc<Mutex<TrackingData>>, 
     pub commands: Arc<Mutex<Vec<TrackingCommand>>>, // [NEW] Command Queue
     running: Arc<Mutex<bool>>,
+}
+
+impl Default for TrackingEngine {
+    fn default() -> Self { Self::new() }
 }
 
 impl TrackingEngine {
@@ -165,7 +172,7 @@ impl TrackingEngine {
 
                  let mut buf = Vec::new();
                  let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 40); // [FIX] Quality 40
-                 if let Ok(_) = encoder.encode_image(&preview) {
+                 if encoder.encode_image(&preview).is_ok() {
                       web_encoder.lock().await.update_frame(buf);
                  }
             }
@@ -249,20 +256,39 @@ impl TrackingEngine {
 
                         // 2. Inference
                         let mut ai_guard = ai.lock().unwrap();
-                        let landmarks_opt = ai_guard.run_inference(&image_arc).unwrap_or(None);
+                        let (face, left, right) = ai_guard.run_inference(&image_arc).unwrap_or((None, None, None));
                         
-                        if let Some(landmarks) = landmarks_opt {
-                             // Write to Data (Solver will pick it up)
-                             if let Ok(mut d) = data_tracking.lock() {
-                                 d.face_landmarks = Some(landmarks);
-                             }
+                        // BUG-08 FIX: Track what was actually detected this frame
+                        let has_face = face.is_some();
+                        let has_left = left.is_some();
+                        let has_right = right.is_some();
+
+                        // Write to Data (Solver will pick it up)
+                        let mut data_for_emit = None;
+                        if let Ok(mut d) = data_tracking.lock() {
+                             d.face_landmarks = face;
+                             d.left_hand_landmarks = left;
+                             d.right_hand_landmarks = right;
+                             
+                             // Clone for emission
+                             data_for_emit = Some(d.clone());
+                        }
+
+                        // BUG-07/08 FIX: Update detection status based on actual inference
+                        if let Ok(mut s) = status.lock() {
+                            s.face_detected = has_face;
+                            s.left_hand_detected = has_left;
+                            s.right_hand_detected = has_right;
+                        }
+
+                        // Emit to Frontend (Visualizer)
+                        if let Some(data) = data_for_emit {
+                            if let Ok(web_guard) = web.try_lock() {
+                                web_guard.emit_tracking_data(&data);
+                            }
                         }
                         
-                        // 3. Spatial Mapping & Constraints
-                        // let _spatial_guard = spatial.lock().unwrap();
-
-                        
-                        // Update Status
+                        // Update FPS Counter
                         frame_count += 1;
                         if last_fps_update.elapsed().as_secs_f32() >= 1.0 {
                             let fps = frame_count as f32 / last_fps_update.elapsed().as_secs_f32();
@@ -270,7 +296,6 @@ impl TrackingEngine {
                                 s.fps = fps;
                                 s.frame_time_ms = 1000.0 / fps;
                                 s.running = true;
-                                s.face_detected = true; 
                             }
                             frame_count = 0;
                             last_fps_update = std::time::Instant::now();
@@ -325,7 +350,7 @@ impl TrackingEngine {
                             },
                             TrackingCommand::SetQuality(mode) => {
                                 println!("[Rust] Set Quality: {}", mode);
-                                // TODO: Implement quality
+                                solver.set_quality(&mode);
                             }
                         }
                     }
@@ -338,20 +363,32 @@ impl TrackingEngine {
                 };
 
                 // 2. Solve
-                let params = solver.solve(&tracking_data);
+                let output = solver.solve(&tracking_data);
 
                 // 3. Send to VRChat
-                // 3. Send to VRChat
-                if !params.is_empty() {
+                let has_data = !output.params.is_empty() || !output.trackers.is_empty();
+                
+                if has_data {
                     let conn = connectivity_logic.lock().unwrap();
-                    if let Err(e) = conn.send_tracking_data(params.clone()) {
-                         eprintln!("[Rust] OSC Error: {}", e); 
-                    } else {
-                        // [DEBUG] Log success every second
-                        if last_log.elapsed().as_millis() > 1000 {
-                            println!("[Rust] Sent {} params to VRChat (e.g. {})", params.len(), params[0].0);
-                            last_log = std::time::Instant::now();
+                    
+                    // Send Custom Params (Face + Hand Params)
+                    if !output.params.is_empty() {
+                        if let Err(e) = conn.send_tracking_data(output.params.clone()) {
+                             eprintln!("[Rust] OSC Params Error: {}", e); 
                         }
+                    }
+
+                    // Send Standard Trackers (Head + Hands)
+                    if !output.trackers.is_empty() {
+                        if let Err(e) = conn.send_tracker_data(output.trackers.clone()) {
+                             eprintln!("[Rust] OSC Trackers Error: {}", e);
+                        }
+                    }
+
+                    // [DEBUG] Log success every second
+                    if last_log.elapsed().as_millis() > 1000 {
+                        println!("[Rust] Sent {} params and {} trackers", output.params.len(), output.trackers.len());
+                        last_log = std::time::Instant::now();
                     }
                 } else {
                      // [DEBUG] Warn if empty?

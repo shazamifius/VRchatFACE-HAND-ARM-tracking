@@ -28,15 +28,11 @@ impl InertiaFilter {
     /// Assumes input is normalized 0.0 to 1.0 usually.
     pub fn filter(&mut self, target: f32) -> f32 {
         let now = Instant::now();
-        let dt = now.duration_since(self.last_time).as_secs_f32();
+        let raw_dt = now.duration_since(self.last_time).as_secs_f32();
         self.last_time = now;
         
-        // Framerate independent Lerp:
-        // factor = 1 - exp(-speed * dt)?
-        // Or simple linear lerp if we assume ~60FPS is constant enough?
-        // Let's use simple lerp with speed factor relative to 60fps (16ms)
-        // normalized_speed = speed * (dt / 0.016)
-        // If dt is huge, clamp to 1.0
+        // Clamp minimum dt to 1ms to prevent freezing at very high iteration rates
+        let dt = raw_dt.max(0.001);
         
         let speed = if target > self.value {
             self.attack

@@ -33,13 +33,11 @@ impl OneEuroFilter {
         }
 
         let t_prev = self.t_prev.unwrap();
-        let dt = t.duration_since(t_prev).as_secs_f32();
+        let raw_dt = t.duration_since(t_prev).as_secs_f32();
         self.t_prev = Some(t);
         
-        // Avoid division by zero
-        if dt <= 0.0 {
-            return self.x_prev;
-        }
+        // Clamp minimum dt to 1ms to prevent filter freezing at very high iteration rates
+        let dt = raw_dt.max(0.001);
 
         let alpha_d = self.alpha(self.d_cutoff, dt);
         let dx = (x - self.x_prev) / dt;

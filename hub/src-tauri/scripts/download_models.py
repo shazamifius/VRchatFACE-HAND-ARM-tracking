@@ -1,36 +1,28 @@
 import os
-import requests
+import urllib.request
 import shutil
+import sys
+import ssl
 
-# List of mirrors for each model. The script will try them one by one.
+# Bypass SSL verification
+ssl._create_default_https_context = ssl._create_unverified_context
+
+# List of mirrors for each model.
 MODELS = {
     "face_detection_short_range.onnx": [
         "https://github.com/PINTO0309/PINTO_model_zoo/raw/main/300_face_detection/face_detection_short_range.onnx",
-        "https://github.com/Kazuhito00/mediapipe-python-sample/raw/main/model/face_detection_short_range.onnx",
     ],
-    "face_landmark_with_attention.onnx": [
-        # PINTO
-        "https://github.com/PINTO0309/PINTO_model_zoo/raw/main/282_face_landmark_with_attention/face_landmark_with_attention.onnx",
-        # Kazuhito00
-        "https://github.com/Kazuhito00/mediapipe-python-sample/raw/main/model/face_landmark_with_attention.onnx",
-        # Axon
-        "https://github.com/Axon/mediapipe-assets/raw/main/face_landmark_with_attention.onnx",
+    "face_landmark.onnx": [
+        "https://github.com/ibaiGorordo/ONNX-MediaPipe-Face-Mesh/raw/main/data/face_mesh.onnx",
+        "https://raw.githubusercontent.com/cedro3/mediapipe_onnx/main/data/face_landmark.onnx",
     ],
-    "hand_landmark_full.onnx": [
-        # Keijiro (Unity)
-        "https://github.com/keijiro/HandLandmarkBarracuda/raw/main/Assets/HandLandmark.onnx",
-        # Wolvic
+    "palm_detection.onnx": [
+        "https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/palm_detection_mediapipe/palm_detection_mediapipe_2023feb.onnx",
+        "https://github.com/Vidya-Suri/hand-gesture-recognition/raw/main/model/palm_detection.onnx",
+    ],
+    "hand_landmark.onnx": [
+        "https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/handpose_estimation_mediapipe/handpose_estimation_mediapipe_2023feb.onnx",
         "https://github.com/Wolvic/wolvic/raw/master/app/src/main/assets/hand_landmark_full.onnx",
-        # PINTO
-        "https://github.com/PINTO0309/PINTO_model_zoo/raw/main/033_Hand_Detection_and_Tracking/hand_landmark_full.onnx",
-        # Geaxgx
-        "https://github.com/geaxgx/depthai_hand_tracker/raw/main/models/hand_landmark_full.onnx",
-    ],
-    "palm_detection_full.onnx": [
-        # Keijiro
-        "https://github.com/keijiro/HandLandmarkBarracuda/raw/main/Assets/PalmDetection.onnx",
-        # PINTO
-        "https://github.com/PINTO0309/PINTO_model_zoo/raw/main/033_Hand_Detection_and_Tracking/palm_detection_full.onnx",
     ]
 }
 
@@ -45,6 +37,17 @@ print(f"Downloading models to {models_dir}...")
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
+
+def download_file(url, dest):
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            with open(dest, 'wb') as out_file:
+                shutil.copyfileobj(response, out_file)
+        return True
+    except Exception as e:
+        print(f"Error downloading {url}: {e}")
+        return False
 
 for name, urls in MODELS.items():
     dest = os.path.join(models_dir, name)
@@ -62,21 +65,15 @@ for name, urls in MODELS.items():
     success = False
     for url in urls:
         print(f"  Trying {url}...", end=" ")
-        try:
-            response = requests.get(url, headers=headers, stream=True, timeout=10)
-            if response.status_code == 200:
-                with open(dest, 'wb') as f:
-                    shutil.copyfileobj(response.raw, f)
-                print("Success!")
-                success = True
-                break
-            else:
-                print(f"Failed ({response.status_code})")
-        except Exception as e:
-            print(f"Error: {e}")
+        sys.stdout.flush()
+        if download_file(url, dest):
+            print("Success!")
+            success = True
+            break
+        else:
+            print("Failed")
     
     if not success:
         print(f"  ERROR: Could not download {name} from any mirror.")
 
 print("\nDone.")
-input("Press Enter to exit...")
