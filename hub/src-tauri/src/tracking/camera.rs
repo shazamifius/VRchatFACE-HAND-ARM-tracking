@@ -1,5 +1,5 @@
 use nokhwa::pixel_format::RgbFormat;
-use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType, ApiBackend, CameraFormat};
+use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType, ApiBackend, CameraFormat, FrameFormat, Resolution};
 use nokhwa::Camera;
 use anyhow::{Result, anyhow};
 use image::{ImageBuffer, Rgb};
@@ -19,74 +19,61 @@ impl CameraManager {
         }
     }
 
-    /// Aggressively find all available cameras using multiple backends
+    /// Find all available cameras using multiple backends
     pub fn get_cameras(&self) -> Vec<CameraInfo> {
         let mut final_list: Vec<CameraInfo> = Vec::new();
         let mut seen_paths = HashSet::new();
 
         // 1. Define Backends to Query
-        // Priority: Auto -> MsMF -> DShow -> V4L2 (Linux) -> UVC (Mac)
-        // On Windows: DShow often finds things MsMF misses (older webcams).
-        // MsMF is more modern but sometimes strict.
         let backends = vec![
             ApiBackend::Auto,
             ApiBackend::MediaFoundation,
             ApiBackend::Video4Linux, // Will be ignored on Windows usually
-            // ApiBackend::DirectShow, // Only if input-dshow is enabled
+            // ApiBackend::DirectShow, // Requires feature
         ];
+        // [FIX] Add Python Bridge FIRST so it is default
+        final_list.push(CameraInfo {
+            index: 999,
+            name: "Python Bridge / Remote (RECOMMENDED)".to_string(),
+            backend: Some("Virtual".to_string()),
+            misc: None,
+            resolution: None,
+            fps: None,
+            formats: None,
+        });
 
-        // We check if DirectShow is available in the current build
-        // Nokhwa doesn't let us iterate variants easily without `strum`, so we try manually if supported.
-        // If `input-dshow` feature is enabled, we should try it.
-        // Ideally we'd add ApiBackend::DirectShow to the list, but let's assume Auto covers it or we add it explicitly.
-        // We will try DShow explicitly if 'Auto' didn't yield everything, or just merge them.
-        
+        // We clone to iterate
         let backends_to_try = backends.clone();
-        // DirectShow is not supported in this version of nokhwa without custom features
-        // We rely on Auto/MsMF
-
 
         for backend in backends_to_try {
             if let Ok(cams) = nokhwa::query(backend) {
                 println!("[Rust] Querying Backend: {:?} -> Found {}", backend, cams.len());
                 for cam_info in cams {
                     // Deduplication logic
-                    // Use miscalleneous string (device path) if available, otherwise name+index
                     let unique_id = cam_info.misc().clone();
                     let name = cam_info.human_name();
                     
-                    // Skip if we've seen this exact device path before
                     if !unique_id.is_empty() {
-                         if seen_paths.contains(&unique_id) {
-                             continue;
-                         }
+                         if seen_paths.contains(&unique_id) { continue; }
                          seen_paths.insert(unique_id.clone());
                     } else {
-                        // If no path, use name + index as a fallback key
                         let composite_key = format!("{}_{}", name, cam_info.index());
-                        if seen_paths.contains(&composite_key) {
-                            continue;
-                        }
+                        if seen_paths.contains(&composite_key) { continue; }
                         seen_paths.insert(composite_key);
                     }
 
-                    // Log it
                     println!("[Rust] Found Camera: {} [{:?}] (Path: {})", name, backend, unique_id);
 
-                    // Add to list
                     final_list.push(CameraInfo {
                         index: cam_info.index().as_index().unwrap_or(0) as i32,
                         name: name,
                         backend: Some(format!("{:?}", backend)),
                         misc: Some(unique_id),
-                        resolution: None, // We could query capabilities here but it's slow
+                        resolution: None,
                         fps: None,
                         formats: None,
                     });
                 }
-            } else {
-                // Backend might not be supported or failed
-                // println!("[Rust] Backend {:?} not available.", backend);
             }
         }
 
@@ -103,6 +90,8 @@ impl CameraManager {
             });
         }
 
+
+
         final_list
     }
 
@@ -111,27 +100,76 @@ impl CameraManager {
         
         let width = if config.width > 0 { config.width } else { 640 };
         let height = if config.height > 0 { config.height } else { 480 };
-
+        let fps = if config.fps > 0 { config.fps } else { 30 };
         let index = CameraIndex::Index(config.index);
 
-        // Step 1: Open a probe camera to enumerate supported formats
+        // Define a helper to convert string format to FrameFormat
+        let requested_fmt = config.format.as_deref().and_then(|fmt_str| {
+            match fmt_str {
+                "MJPEG" => Some(FrameFormat::MJPEG),
+                "YUYV" => Some(FrameFormat::YUYV),
+                "NV12" => Some(FrameFormat::NV12),
+                _ => None
+            }
+        });
+
+        // ------------------------------------------------------------------
+        // NEW LOGIC: If a specific format is requested (from Benchmark), USE IT.
+        // ------------------------------------------------------------------
+        if let Some(target_fmt) = requested_fmt {
+            println!("[Rust] Strict Format Requested: {:?} {}x{} @ {}fps", target_fmt, width, height, fps);
+            
+            let format = CameraFormat::new(
+                Resolution::new(width, height),
+                target_fmt,
+                fps
+            );
+            
+            // Try EXACT request first
+            let req = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(format));
+            
+            println!("[Rust] Attempting Strict Open...");
+            match Camera::new(index.clone(), req) {
+                Ok(mut cam) => {
+                    if let Ok(_) = cam.open_stream() {
+                        let final_fmt = cam.camera_format();
+                        println!("[Rust] Strict Open Success! Format: {}x{} {:?} @ {}fps", 
+                            final_fmt.resolution().width(), final_fmt.resolution().height(),
+                            final_fmt.format(), final_fmt.frame_rate());
+                            
+                        self.camera = Some(cam);
+                        self.current_config = Some(config);
+                        return Ok(());
+                    } else {
+                        println!("[Rust] Strict Open Failed (Stream Init). Falling back to heuristics...");
+                    }
+                },
+                Err(e) => {
+                    println!("[Rust] Strict Open Failed (Camera Create): {}. Falling back to heuristics...", e);
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // FALLBACK / AUTO LOGIC (Original Heuristics)
+        // ------------------------------------------------------------------
+        println!("[Rust] Using Heuristic Camera Selection (MJPEG Priority)...");
+
+        // Step 1: Enumeration to find best "theoretical" format
+        // We prioritize MJPEG > YUYV > NV12 because NV12 might be slow to decode or buggy in some backends
         let probe = RequestedFormat::new::<RgbFormat>(RequestedFormatType::None);
         let mut probe_cam = Camera::new(index.clone(), probe)
             .map_err(|e| anyhow!("Cannot open camera: {}", e))?;
 
-        // Step 2: Find the best format from what the camera actually supports
         let best_format = if let Ok(formats) = probe_cam.compatible_camera_formats() {
             println!("[Rust] Camera supports {} formats:", formats.len());
-            for (i, f) in formats.iter().enumerate().take(20) {
+            for (i, f) in formats.iter().enumerate() {
                 println!("[Rust]   [{}] {}x{} {:?} @ {}fps", 
                     i, f.resolution().width(), f.resolution().height(),
                     f.format(), f.frame_rate());
             }
-            if formats.len() > 20 {
-                println!("[Rust]   ... and {} more", formats.len() - 20);
-            }
 
-            // Score each format: prioritize matching resolution, then highest fps
+            // Score: MJPEG > High FPS > Resolution
             let mut best: Option<CameraFormat> = None;
             let mut best_score: i64 = -1;
             
@@ -139,12 +177,14 @@ impl CameraManager {
                 let fw = f.resolution().width();
                 let fh = f.resolution().height();
                 let ffps = f.frame_rate();
+                let fmt = f.format();
                 
-                // Resolution distance (lower is better, 0 = exact match)
                 let res_dist = ((fw as i64 - width as i64).abs() + (fh as i64 - height as i64).abs()) as i64;
+                let score_res = 10000 - res_dist.min(10000);
+                let score_fps = (ffps as i64) * 100;
+                let score_fmt = if fmt == FrameFormat::MJPEG { 10000 } else { 0 }; // MJPEG HUGE bonus
                 
-                // Score: heavily favor matching resolution, then favor high FPS
-                let score = (10000 - res_dist.min(10000)) + ffps as i64;
+                let score = score_res + score_fps + score_fmt;
                 
                 if score > best_score {
                     best_score = score;
@@ -156,40 +196,124 @@ impl CameraManager {
             println!("[Rust] Could not enumerate formats, using defaults");
             None
         };
-
-        // Drop probe camera so we can re-open with correct format
         drop(probe_cam);
 
-        // Step 3: Create a NEW camera requesting the exact best format
-        let camera = if let Some(fmt) = best_format {
-            println!("[Rust] Requesting exact format: {}x{} {:?} @ {}fps", 
+        // Step 2: Open Camera with Retry Logic
+        
+        let try_open = |camera_idx: CameraIndex, req: RequestedFormat| -> Result<Camera> {
+             let mut cam = Camera::new(camera_idx, req)
+                .map_err(|e| anyhow!("Camera create failed: {}", e))?;
+             cam.open_stream()
+                .map_err(|e| anyhow!("Stream open failed: {}", e))?;
+             Ok(cam)
+        };
+
+        // Attempt 1: Closest to Best Enumerated (Likely MJPEG if available)
+        let mut final_camera = if let Some(fmt) = best_format {
+            println!("[Rust] Attempt 1: Closest to enumerated best: {}x{} {:?} @ {}fps", 
                 fmt.resolution().width(), fmt.resolution().height(),
                 fmt.format(), fmt.frame_rate());
             
-            let exact_request = RequestedFormat::new::<RgbFormat>(
-                RequestedFormatType::Exact(fmt)
-            );
-            match Camera::new(index.clone(), exact_request) {
-                Ok(cam) => cam,
+            let req = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(fmt));
+            match try_open(index.clone(), req) {
+                Ok(cam) => Some(cam),
                 Err(e) => {
-                    println!("[Rust] Exact format failed: {}. Falling back to None.", e);
-                    Camera::new(index, RequestedFormat::new::<RgbFormat>(RequestedFormatType::None))
-                        .map_err(|e2| anyhow!("Fallback also failed: {}", e2))?
+                    println!("[Rust] Attempt 1 failed: {}", e);
+                    None
                 }
             }
+        } else { None };
+
+        // Check FPS
+        let mut fps_ok = false;
+        if let Some(ref cam) = final_camera {
+            let f = cam.camera_format();
+            if f.frame_rate() >= 15 { fps_ok = true; }
+            else { println!("[Rust] Attempt 1 yielded low FPS: {}", f.frame_rate()); }
+        }
+
+        // Attempt 2: Try MJPEG Explicitly at 640x480
+        if !fps_ok {
+             if let Some(mut cam) = final_camera.take() {
+                 let _ = cam.stop_stream(); 
+             }
+             
+             println!("[Rust] Attempt 2: Forcing MJPEG 640x480 @ 30fps...");
+             let attempt_fmt = CameraFormat::new(
+                 Resolution::new(width, height),
+                 FrameFormat::MJPEG,
+                 30
+             );
+             let req = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(attempt_fmt));
+             
+             if let Ok(cam) = try_open(index.clone(), req) {
+                 let f = cam.camera_format();
+                 if f.frame_rate() >= 15 { 
+                     fps_ok = true; 
+                     final_camera = Some(cam);
+                     println!("[Rust] Attempt 2 Successful! MJPEG {}fps", f.frame_rate());
+                 } else {
+                     println!("[Rust] Attempt 2 yielded low FPS: {}", f.frame_rate());
+                     final_camera = Some(cam); 
+                 }
+             }
+        }
+
+        // Attempt 3: Lower Resolution (640x360) NV12 (Fallback)
+        if !fps_ok {
+             if let Some(mut cam) = final_camera.take() {
+                 let _ = cam.stop_stream();
+             }
+
+             println!("[Rust] Attempt 3: Lower Resolution 640x360 NV12 @ 30fps...");
+             let low_res = CameraFormat::new(
+                 Resolution::new(640, 360),
+                 FrameFormat::NV12,
+                 30
+             );
+             let req = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(low_res));
+             
+             if let Ok(cam) = try_open(index.clone(), req) {
+                  final_camera = Some(cam);
+                  println!("[Rust] Attempt 3 Chosen. FPS: {}", final_camera.as_ref().unwrap().camera_format().frame_rate());
+             }
+        }
+
+        let camera = if let Some(cam) = final_camera {
+            cam
         } else {
-            Camera::new(index, RequestedFormat::new::<RgbFormat>(RequestedFormatType::None))
-                .map_err(|e| anyhow!("Cannot open camera: {}", e))?
+             println!("[Rust] All attempts failed. Falling back to simple request.");
+             let fallback_fmt = CameraFormat::new(
+                 Resolution::new(width, height),
+                 FrameFormat::MJPEG, // Try MJPEG first in fallback
+                 30
+             );
+             try_open(index.clone(), RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(fallback_fmt)))
+                 .or_else(|_| try_open(index, RequestedFormat::new::<RgbFormat>(RequestedFormatType::None)))?
         };
 
-        let mut camera = camera;
-        camera.open_stream()
-            .map_err(|e| anyhow!("Failed to open camera stream: {}", e))?;
+        // --- DISABLE AUTO EXPOSURE (Classic 1 FPS Fix) ---
+        // (Commented out due to compilation errors with nokhwa 0.10.x control API)
+        /*
+        println!("[Rust] Attempting to disable Auto-Exposure...");
+        if let Err(e) = camera.set_camera_control(KnownCameraControl::AutoExposure, ControlValue::Manual(0)) {
+             println!("[Rust] Failed to set AutoExposure to Manual(0): {}", e);
+        } else {
+            println!("[Rust] AutoExposure set to Manual(0)");
+        }
+        */
+        
+        // Also set Exposure Time to something low? 
+        // Need to check specific controls. For now, let's assume switching to MJPEG or disabling AutoExposure helps.
 
         let final_fmt = camera.camera_format();
         println!("[Rust] Camera Started! Final format: {}x{} {:?} @ {}fps", 
             final_fmt.resolution().width(), final_fmt.resolution().height(),
             final_fmt.format(), final_fmt.frame_rate());
+            
+        if final_fmt.frame_rate() < 15 {
+             println!("[Rust] WARNING: Still low FPS. Tracking WILL suffer.");
+        }
 
         self.camera = Some(camera);
         self.current_config = Some(config);
@@ -198,7 +322,6 @@ impl CameraManager {
 
     pub fn get_frame(&mut self) -> Result<ImageBuffer<Rgb<u8>, Vec<u8>>> {
         if let Some(ref mut camera) = self.camera {
-            // Nokhwa handles format conversion to RGB automatically via RgbFormat generic
             let frame = camera.frame()?;
             let buffer = frame.decode_image::<RgbFormat>()?;
             Ok(buffer)
@@ -212,5 +335,86 @@ impl CameraManager {
             let _ = camera.stop_stream();
             println!("[Rust] Camera Stopped");
         }
+    }
+
+    pub fn test_all_cameras(&self) -> Vec<crate::tracking::types::CameraBenchmarkResult> {
+        use crate::tracking::types::CameraBenchmarkResult;
+        let cameras = self.get_cameras();
+        let mut results = Vec::new();
+
+        println!("[Rust] Starting Camera Benchmark ({} cameras)...", cameras.len());
+
+        for cam_info in cameras {
+            // Skip "virtual" or duplicate entries if needed, but for now test all physical ones.
+            if cam_info.index == 999 { continue; } 
+
+            let index = CameraIndex::Index(cam_info.index as u32);
+            let mut result = CameraBenchmarkResult {
+                index: cam_info.index,
+                name: cam_info.name.clone(),
+                format: "Unknown".to_string(),
+                width: 0,
+                height: 0,
+                fps_expected: 30,
+                fps_actual: 0.0,
+                success: false,
+                error: None,
+            };
+
+            println!("[Rust] Benchmarking Camera {}: {}", cam_info.index, cam_info.name);
+
+            // Attempt: Open with high compatibility settings (Auto)
+            // We want to see if we can get ANY stream.
+            let req = RequestedFormat::new::<RgbFormat>(RequestedFormatType::None);
+            
+            match Camera::new(index.clone(), req) {
+                Ok(mut cam) => {
+                    match cam.open_stream() {
+                        Ok(_) => {
+                            let fmt = cam.camera_format();
+                            result.format = format!("{:?}", fmt.format());
+                            result.width = fmt.resolution().width();
+                            result.height = fmt.resolution().height();
+                            
+                            // Measure FPS over 2 seconds
+                            let start = std::time::Instant::now();
+                            let mut frames = 0;
+                            let mut success_read = false;
+                            
+                            loop {
+                                if start.elapsed().as_secs_f32() > 2.0 { break; }
+                                match cam.frame() {
+                                    Ok(_) => {
+                                        frames += 1;
+                                        success_read = true;
+                                    },
+                                    Err(_) => {
+                                        // std::thread::sleep(std::time::Duration::from_millis(5));
+                                    }
+                                }
+                            }
+                            
+                            let fps = frames as f32 / start.elapsed().as_secs_f32();
+                            result.fps_actual = fps;
+                            result.success = fps > 1.0 && success_read; // At least SOME frames
+                            
+                            println!("[Rust]   Result: {:.1} FPS (Format: {} {}x{})", fps, result.format, result.width, result.height);
+                            let _ = cam.stop_stream();
+                        },
+                        Err(e) => {
+                            println!("[Rust]   Stream Open Failed: {}", e);
+                            result.error = Some(e.to_string());
+                        }
+                    }
+                },
+                Err(e) => {
+                    println!("[Rust]   Camera Access Failed: {}", e);
+                    result.error = Some(e.to_string());
+                }
+            }
+            results.push(result);
+        }
+        println!("[Rust] Benchmark Complete. Returning {} results.", results.len());
+        results
     }
 }

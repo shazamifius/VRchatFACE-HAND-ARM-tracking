@@ -45,9 +45,20 @@ pub struct TrackingStatus {
     pub fps: f32,
     pub frame_time_ms: f32,
     pub running: bool,
-    pub phone_connected: bool, // [NEW]
-    pub latency_ms: u64, // [NEW]
-    pub quality: String, // "High", "Medium", "Low"
+    pub phone_connected: bool,
+    pub latency_ms: u64,
+    pub quality: String,
+    // Profiling
+    pub solver_ms: f32,
+    pub osc_ms: f32,
+    // Tracking health
+    pub face_lost: bool,
+    pub left_hand_lost: bool,
+    pub right_hand_lost: bool,
+    // Debug / Health
+    pub model_loaded: bool,
+    pub camera_name: String,
+    pub camera_fps_real: f32, // Actual FPS from camera thread
 }
 
 /// Raw tracking data from the AI engine (Python/Rust)
@@ -64,4 +75,17 @@ pub struct TrackingData {
 pub enum TrackingCommand {
     Calibrate(String), // "Neutral" or "TPose" or "Center"
     SetQuality(String), // "Low", "Medium", "High"
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct CameraBenchmarkResult {
+    pub index: i32,
+    pub name: String,
+    pub format: String,
+    pub width: u32,
+    pub height: u32,
+    pub fps_expected: u32,
+    pub fps_actual: f32,
+    pub success: bool,
+    pub error: Option<String>,
 }

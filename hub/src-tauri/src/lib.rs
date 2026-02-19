@@ -2,6 +2,7 @@
 // Manages tracking via Native Rust Engine
 
 pub mod tracking;
+pub mod logging;
 
 // use std::sync::Mutex;
 use tauri::{State, Manager, Emitter};
@@ -49,18 +50,22 @@ async fn start_tracking(
     fps: Option<u32>,
     format: Option<String>,
 ) -> Result<bool, String> {
+    println!("[Rust] DEBUG: start_tracking called with: w={:?} h={:?} fps={:?} fmt={:?}", width, height, fps, format);
+
     // 1. Configure OSC
     if let Ok(mut connectivity) = state.rust_engine.connectivity.lock() {
         connectivity.set_osc_target(&osc_ip, osc_port as u16);
     }
 
     // 2. Start Engine
+    // 2. Start Engine
+    // [FIX] Force 640x480 for smoothness.
     let config = crate::tracking::types::CameraConfig {
         index: camera_index as u32,
-        width: width.unwrap_or(640),
-        height: height.unwrap_or(480),
+        width: 640,
+        height: 480,
         fps: fps.unwrap_or(30),
-        format: format,
+        format: None, // [FIX] Let Auto pick best format for 30fps (NV12 strict caused 1fps)
     };
     state.rust_engine.start(config).map_err(|e| e.to_string())?;
     
@@ -194,6 +199,24 @@ fn set_tracking_quality(state: State<TrackingState>, quality: String) -> Result<
     Ok(true)
 }
 
+#[tauri::command]
+async fn run_camera_benchmark(state: State<'_, TrackingState>) -> Result<Vec<crate::tracking::types::CameraBenchmarkResult>, String> {
+    println!("[Rust] Benchmark requested...");
+    let camera = state.rust_engine.camera.clone();
+    
+    // Blocking task because it takes time
+    let results = tokio::task::spawn_blocking(move || {
+        // [FIX] Use blocking lock
+        let mut mgr = camera.lock().unwrap();
+        // Ensure current stream is stopped
+        mgr.stop();
+        
+        mgr.test_all_cameras()
+    }).await.map_err(|e| format!("Benchmark failed: {}", e))?;
+    
+    Ok(results)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -203,15 +226,19 @@ pub fn run() {
             let state = app.state::<TrackingState>();
             let web_clone = state.rust_engine.web_interface.clone();
             let app_handle = app.handle().clone(); // [NEW] Clone handle
+            let web_handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 let mut guard = web_clone.lock().await;
                 // [NEW] Pass app_handle
-                if let Err(e) = guard.start(9001, app_handle).await {
+                if let Err(e) = guard.start(9001, web_handle).await {
                     println!("[Rust] Failed to start web server: {}", e);
                 } else {
                     println!("[Rust] Web Server started on port 9001");
                 }
             });
+
+
+            
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -219,15 +246,22 @@ pub fn run() {
             start_tracking,
             stop_tracking,
             get_tracking_status,
-            get_tracking_data, // [NEW]
+            get_tracking_data,
             start_cloudflare_tunnel,
             stop_cloudflare_tunnel,
             get_tunnel_qr,
             get_local_ip,
             generate_qr_code,
             start_calibration,
-            set_tracking_quality, // [NEW]
+            set_tracking_quality,
+            run_camera_benchmark,
+            get_system_logs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[tauri::command]
+fn get_system_logs() -> Vec<String> {
+    crate::logging::get_recent_logs()
 }

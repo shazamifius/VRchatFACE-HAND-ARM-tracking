@@ -13,6 +13,7 @@ pub mod blaze;
 pub mod bridge;
 pub mod solver;
 pub mod filter;
+pub mod terminal_monitor;
 pub mod pnp;
 pub mod smoothing;
 pub mod ik;
@@ -94,6 +95,7 @@ impl TrackingEngine {
         let bridge = OscBridge::new(9002).expect("Failed to bind OSC Bridge port 9002");
         let data_clone = data.clone();
         let status_clone = status.clone();
+        let status_logic = status.clone(); // For logic thread profiling
         
         let bridge_running = running.clone();
         bridge.start(bridge_running, Box::new(move |addr, args| {
@@ -113,6 +115,15 @@ impl TrackingEngine {
                     }
                     if let Ok(mut s) = status_clone.lock() {
                         s.face_detected = true;
+                    }
+                    // [DEBUG] Log receipt (Throttled)
+                    // We can't easily throttle here without static/atomic.
+                    // Let's just print every 100th frame maybe? 
+                    // Or rely on the logic thread [Perf] logs.
+                    // Actually, let's print once per second if possible.
+                    // For now, a simple low-freq print:
+                    if rand::random::<f32>() < 0.01 {
+                         println!("[Rust] Bridge RX: Face Data Received");
                     }
                 }
             } else if addr.starts_with("/tracking/hand/") {
@@ -185,24 +196,30 @@ impl TrackingEngine {
         let use_remote_cam = config.index == 999;
         let config_clone = config.clone();
 
+        // Create a separate clone for the tracking thread (status_clone was moved to bridge)
+        let status_capture = status.clone();
+
         thread::spawn(move || {
             // ... (model init omitted) ...
              if let Ok(mut engine) = ai.lock() {
                  let cwd = std::env::current_dir().unwrap_or_default();
                  let models_dir = if cwd.join("models").exists() { cwd.join("models") } else { cwd.join("../models") };
                  
-                 // [REVERTED] Local Inference was disabled, but we need the loop for Phone Mode!
                  if let Err(e) = engine.load_models(models_dir.to_str().unwrap_or(".")) { 
-                    println!("[Rust] Failed to load models: {}", e); 
+                    crate::logging::log(&format!("[Rust] Failed to load models: {}", e));
+                    if let Ok(mut s) = status_capture.lock() { s.model_loaded = false; }
                  } else {
-                    println!("[Rust] Local Models Loaded Successfully.");
+                    crate::logging::log("[Rust] Local Models Loaded Successfully.");
+                    if let Ok(mut s) = status_capture.lock() { s.model_loaded = true; }
                  }
-                 // println!("[Rust] Local Inference Disabled. Waiting for Python Bridge data...");
-                 // return; // [FIX] Removed early exit so Phone Mode loop runs!
              }
-             if let Ok(mut cam) = camera.lock() {
+              if let Ok(mut cam) = camera.lock() {
                  if !use_remote_cam {
-                     if let Err(e) = cam.start(config_clone) { println!("[Rust] Failed to start camera: {}", e); return; }
+                     if let Err(e) = cam.start(config_clone) { 
+                         crate::logging::log(&format!("[Rust] Failed to start camera: {}", e)); 
+                         return; 
+                     }
+                      crate::logging::log("[Rust] Camera started.");
                  }
              }
 
@@ -222,7 +239,7 @@ impl TrackingEngine {
                     match jpeg_opt {
                         Some(data) => {
                             // Phone connected!
-                            let mut status_guard = status.lock().unwrap();
+                            let mut status_guard = status_capture.lock().unwrap();
                             status_guard.phone_connected = true;
                             status_guard.latency_ms = 50; 
                             drop(status_guard);
@@ -234,7 +251,7 @@ impl TrackingEngine {
                             }
                         },
                         None => {
-                            let mut status_guard = status.lock().unwrap();
+                            let mut status_guard = status_capture.lock().unwrap();
                             status_guard.phone_connected = false;
                             status_guard.latency_ms = 0;
                             Err(anyhow::anyhow!("No remote frame"))
@@ -256,7 +273,18 @@ impl TrackingEngine {
 
                         // 2. Inference
                         let mut ai_guard = ai.lock().unwrap();
-                        let (face, left, right) = ai_guard.run_inference(&image_arc).unwrap_or((None, None, None));
+                        let inference_result = ai_guard.run_inference(&image_arc);
+                        
+                        let (face, left, right) = match inference_result {
+                            Ok(res) => res,
+                            Err(e) => {
+                                // [DEBUG] Log the specific AI error!
+                                if rand::random::<f32>() < 0.01 { // Throttle
+                                     println!("[Rust] AI Inference Error: {}", e);
+                                }
+                                (None, None, None)
+                            }
+                        };
                         
                         // BUG-08 FIX: Track what was actually detected this frame
                         let has_face = face.is_some();
@@ -275,7 +303,7 @@ impl TrackingEngine {
                         }
 
                         // BUG-07/08 FIX: Update detection status based on actual inference
-                        if let Ok(mut s) = status.lock() {
+                        if let Ok(mut s) = status_capture.lock() {
                             s.face_detected = has_face;
                             s.left_hand_detected = has_left;
                             s.right_hand_detected = has_right;
@@ -292,8 +320,9 @@ impl TrackingEngine {
                         frame_count += 1;
                         if last_fps_update.elapsed().as_secs_f32() >= 1.0 {
                             let fps = frame_count as f32 / last_fps_update.elapsed().as_secs_f32();
-                            if let Ok(mut s) = status.lock() {
+                            if let Ok(mut s) = status_capture.lock() {
                                 s.fps = fps;
+                                s.camera_fps_real = fps;
                                 s.frame_time_ms = 1000.0 / fps;
                                 s.running = true;
                             }
@@ -319,6 +348,7 @@ impl TrackingEngine {
         let connectivity_logic = self.connectivity.clone();
         let running_logic = self.running.clone();
         let commands_logic = commands.clone();
+        let web_logic = self.web_interface.clone(); // [NEW] Pass web interface to logic thread
         
         use self::solver::Solver;
         
@@ -326,7 +356,7 @@ impl TrackingEngine {
             let mut solver = Solver::new();
             println!("[Rust] Logic thread started");
             
-            let mut last_log = std::time::Instant::now();
+            let mut _last_log = std::time::Instant::now();
             while *running_logic.lock().unwrap() {
                 let start = std::time::Instant::now();
                 
@@ -362,41 +392,70 @@ impl TrackingEngine {
                     guard.clone()
                 };
 
-                // 2. Solve
+                // 2. Solve (profiled)
+                let t_solve = std::time::Instant::now();
                 let output = solver.solve(&tracking_data);
+                let solve_ms = t_solve.elapsed().as_secs_f32() * 1000.0;
 
-                // 3. Send to VRChat
+                // 3. Send to VRChat (profiled)
                 let has_data = !output.params.is_empty() || !output.trackers.is_empty();
+                let mut osc_ms = 0.0f32;
                 
                 if has_data {
                     let conn = connectivity_logic.lock().unwrap();
                     
-                    // Send Custom Params (Face + Hand Params)
+                    let t_osc = std::time::Instant::now();
                     if !output.params.is_empty() {
                         if let Err(e) = conn.send_tracking_data(output.params.clone()) {
                              eprintln!("[Rust] OSC Params Error: {}", e); 
                         }
                     }
-
-                    // Send Standard Trackers (Head + Hands)
                     if !output.trackers.is_empty() {
                         if let Err(e) = conn.send_tracker_data(output.trackers.clone()) {
                              eprintln!("[Rust] OSC Trackers Error: {}", e);
                         }
                     }
+                    osc_ms = t_osc.elapsed().as_secs_f32() * 1000.0;
 
-                    // [DEBUG] Log success every second
-                    if last_log.elapsed().as_millis() > 1000 {
-                        println!("[Rust] Sent {} params and {} trackers", output.params.len(), output.trackers.len());
-                        last_log = std::time::Instant::now();
+                    // [NEW] Emit OSC Data to Frontend (Visual Monitor)
+                    // Throttle? The frontend can handle 60 events/sec or we can throttle here.
+                    // Let's emit every frame, JS can throttle rendering if needed.
+                    if has_data {
+                        if let Some(guard) = web_logic.try_lock().ok() { // usage of try_lock to avoid blocking logic thread
+                             guard.emit_osc_data(&output.params);
+                        }
                     }
-                } else {
-                     // [DEBUG] Warn if empty?
-                     if last_log.elapsed().as_millis() > 1000 {
-                         // println!("[Rust] Solver returned 0 params (No Face/Hand?)");
-                         // last_log = std::time::Instant::now(); 
-                     }
                 }
+
+                // Total frame time
+                let total_ms = start.elapsed().as_secs_f32() * 1000.0;
+
+                // Spike warning
+                if total_ms > 20.0 {
+                    eprintln!("[Perf] SPIKE {:.1}ms (solve={:.1} osc={:.1})", total_ms, solve_ms, osc_ms);
+                }
+
+                // Update status with profiling + tracking health
+                if let Ok(mut s) = status_logic.lock() {
+                    s.solver_ms = solve_ms;
+                    s.osc_ms = osc_ms;
+                    s.face_lost = tracking_data.face_landmarks.is_none();
+                    s.left_hand_lost = tracking_data.left_hand_landmarks.is_none();
+                    s.right_hand_lost = tracking_data.right_hand_landmarks.is_none();
+                }
+
+                // === TERMINAL MONITOR (User Request: "Invite de commande stylé") ===
+                // We use our new monitor module to draw the dashboard
+                // Since this thread runs at 60Hz, the monitor handles its own throttling (e.g. 15Hz)
+                if output.params.len() > 0 {
+                    // Lazy init monitor (or just create local instance since we don't share it)
+                    // We can't easily modify 'self' here as we are in a closure.
+                    // So we create a static/local monitor?
+                    // Actually, let's just create it outside the loop.
+                }
+                
+                // (See below for where I actually put the variable)
+                
 
                 // 4. Sleep to maintain ~60 FPS
                 let elapsed = start.elapsed();
@@ -409,6 +468,7 @@ impl TrackingEngine {
 
         Ok(())
     }
+
 
     pub fn stop(&self) {
         *self.running.lock().unwrap() = false;

@@ -38,27 +38,17 @@ impl ConnectivityManager {
             addr: address.to_string(),
             args,
         };
-        // [DEBUG LOG]
-        // println!("[OSC] Out -> {} : {:?}", msg.addr, msg.args);
         
-        // Clone args if needed or recreate msg, actually msg is moved into Packet.
-        // So we printed it before move. But wait, msg.args is Vec which is not Copy.
-        // println! borrows msg.
-        // OscPacket::Message(msg) moves msg.
-        // So print MUST be before move, but we cannot borrow then move?
-        // Rust rules:
-        // println! borrows.
-        // Packet move happens after.
-        // This should be fine ONLY if println! doesn't enable a loan that outlasts the statement.
-        // But to be safe and avoid headaches:
-        
-        // [DEBUG LOG]
-        // println!("[OSC] Out -> {} : {:?}", addr, args_copy);
-
+        // Broadcast to Main Target (VRChat) AND Monitor (Localhost:9005)
         let packet = OscPacket::Message(msg);
         let msg_buf = encoder::encode(&packet)?;
-        // send_to may return WouldBlock on non-blocking socket — ignore
+        
+        // 1. VRChat
         let _ = self.osc_socket.send_to(&msg_buf, &self.osc_target);
+        
+        // 2. Monitor (Hardcoded for now as it's internal)
+        let _ = self.osc_socket.send_to(&msg_buf, "127.0.0.1:9005");
+        
         Ok(())
     }
 
@@ -73,7 +63,12 @@ impl ConnectivityManager {
             content: packets,
         };
         let buf = encoder::encode(&OscPacket::Bundle(bundle))?;
+        
+        // 1. VRChat
         let _ = self.osc_socket.send_to(&buf, &self.osc_target);
+        // 2. Monitor
+        let _ = self.osc_socket.send_to(&buf, "127.0.0.1:9005");
+        
         Ok(())
     }
 
@@ -290,17 +285,7 @@ impl ConnectivityManager {
         Ok(())
     }
 
-    // Helper to send variants
-    // Helper to send variants
-    fn send_bool_param(&self, param: &str, value: bool) {
-         let addr = format!("/avatar/parameters/{}", param);
-         let _ = self.send_osc(&addr, vec![OscType::Bool(value)]);
-    }
 
-    fn send_avatar_param(&self, param: &str, value: f32) {
-         let addr = format!("/avatar/parameters/{}", param);
-         let _ = self.send_osc(&addr, vec![OscType::Float(value)]);
-    }
 
     /// Start Cloudflare Tunnel and scrape the URL
     pub fn start_tunnel(&self, port: u16) -> Result<()> {

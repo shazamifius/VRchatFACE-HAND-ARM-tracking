@@ -13,11 +13,6 @@ pub struct Solver {
     last_sent_rotation: Option<UnitQuaternion<f32>>, // For Dead Zone
     last_sent_translation: Option<Vector3<f32>>,     // For Dead Zone
     
-    // Filters
-    filters: HashMap<String, OneEuroFilter>,
-    inertia: HashMap<String, InertiaFilter>,
-    hand_dead_zones: HashMap<String, Vector3<f32>>, // Store last raw hand position
-    
     // IK
     arm_ik: ArmIK,
 
@@ -55,8 +50,67 @@ pub struct Solver {
     last_face_params: Vec<(String, f32)>,
     left_hand_lost_at: Option<std::time::Instant>,
     right_hand_lost_at: Option<std::time::Instant>,
+    last_left_hand_params: Vec<(String, f32)>,
+    last_right_hand_params: Vec<(String, f32)>,
+
+    // Structured Filters
+    head_filters: HeadFilters,
+    eyes_x: OneEuroFilter,
+    eyes_y: OneEuroFilter,
+    
+    // Inertia filters (Blinks, Jaw)
+    blink_l: InertiaFilter,
+    blink_r: InertiaFilter,
+    jaw: InertiaFilter,
+
+    // Hands
+    left_hand: HandFilters,
+    right_hand: HandFilters,
     
     filter_params: (f32, f32), // (min_cutoff, beta)
+}
+
+pub struct HeadFilters {
+    pitch: OneEuroFilter,
+    yaw: OneEuroFilter,
+    roll: OneEuroFilter,
+    x: OneEuroFilter,
+    y: OneEuroFilter,
+    z: OneEuroFilter,
+}
+
+pub struct HandFilters {
+    // We filter Position (x,y,z) and Elbow (x,y,z)
+    // We also handle dead zones here
+    pos_x: OneEuroFilter,
+    pos_y: OneEuroFilter,
+    pos_z: OneEuroFilter,
+    elbow_x: OneEuroFilter,
+    elbow_y: OneEuroFilter,
+    elbow_z: OneEuroFilter,
+    
+    dead_zone_pos: Option<Vector3<f32>>,
+    dead_zone_elbow: Option<Vector3<f32>>,
+}
+
+impl HandFilters {
+    pub fn new(mc: f32, beta: f32) -> Self {
+        Self {
+            pos_x: OneEuroFilter::new(mc, beta),
+            pos_y: OneEuroFilter::new(mc, beta),
+            pos_z: OneEuroFilter::new(mc, beta),
+            elbow_x: OneEuroFilter::new(mc, beta),
+            elbow_y: OneEuroFilter::new(mc, beta),
+            elbow_z: OneEuroFilter::new(mc, beta),
+            dead_zone_pos: None,
+            dead_zone_elbow: None,
+        }
+    }
+    
+    pub fn reset_params(&mut self, mc: f32, beta: f32) {
+        // Re-create or update? Simplified: Re-create to clear history too, matching old behavior
+        *self = Self::new(mc, beta);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -78,17 +132,41 @@ impl Default for Solver {
 
 impl Solver {
     pub fn new() -> Self {
+        let (mc, beta) = (1.5, 0.01); // Default
+
         Self { 
-            filters: HashMap::new(),
-            inertia: HashMap::new(),
+            // State
             last_rotation: None,
             last_translation: None, 
             last_sent_rotation: None,
             last_sent_translation: None,
+            
+            // Logic
             arm_ik: ArmIK::new(30.0, 25.0), 
-            hand_dead_zones: HashMap::new(),
             calibration: CalibrationManager::new(),
             user_profile: UserProfile::default(),
+
+            // Filters (New)
+            head_filters: HeadFilters {
+                pitch: OneEuroFilter::new(mc, beta),
+                yaw: OneEuroFilter::new(mc, beta),
+                roll: OneEuroFilter::new(mc, beta),
+                x: OneEuroFilter::new(mc, beta),
+                y: OneEuroFilter::new(mc, beta),
+                z: OneEuroFilter::new(mc, beta),
+            },
+            eyes_x: OneEuroFilter::new(mc, beta),
+            eyes_y: OneEuroFilter::new(mc, beta),
+            
+            // Inertia (Attack, Decay) - tuned values from old code:
+            // Blink: 1.0, 0.2
+            blink_l: InertiaFilter::new(1.0, 0.2),
+            blink_r: InertiaFilter::new(1.0, 0.2),
+            // Jaw: 0.5, 0.05
+            jaw: InertiaFilter::new(0.5, 0.05),
+
+            left_hand: HandFilters::new(mc, beta),
+            right_hand: HandFilters::new(mc, beta),
 
             // Eye Animation
             saccade_target: (0.0, 0.0),
@@ -118,8 +196,10 @@ impl Solver {
             last_face_params: Vec::new(),
             left_hand_lost_at: None,
             right_hand_lost_at: None,
+            last_left_hand_params: Vec::new(),
+            last_right_hand_params: Vec::new(),
             
-            filter_params: (1.5, 0.01), // Default Medium
+            filter_params: (mc, beta),
         }
     }
     
@@ -205,6 +285,65 @@ impl Solver {
         0.0
     }
 
+    /// Micro-expressions: subtle ambient face movements to prevent frozen look
+    /// Returns (brow_inner_up, cheek_raise, mouth_corner)
+    pub fn update_micro_expressions(&mut self) -> (f32, f32, f32) {
+        // BrowInnerUp: 0-5%, every 4-8s
+        if self.micro_brow_timer.elapsed() > self.micro_brow_interval {
+            self.micro_brow_target = self.prng_range(0.0, 0.05);
+            let next = self.prng_range(4000.0, 8000.0) as u64;
+            self.micro_brow_interval = std::time::Duration::from_millis(next);
+            self.micro_brow_timer = std::time::Instant::now();
+        }
+        
+        // CheekRaise: 0-3%, every 6-12s
+        if self.micro_cheek_timer.elapsed() > self.micro_cheek_interval {
+            self.micro_cheek_target = self.prng_range(0.0, 0.03);
+            let next = self.prng_range(6000.0, 12000.0) as u64;
+            self.micro_cheek_interval = std::time::Duration::from_millis(next);
+            self.micro_cheek_timer = std::time::Instant::now();
+        }
+        
+        // MouthCorner: ±2%, every 5-10s
+        if self.micro_mouth_timer.elapsed() > self.micro_mouth_interval {
+            self.micro_mouth_target = self.prng_range(-0.02, 0.02);
+            let next = self.prng_range(5000.0, 10000.0) as u64;
+            self.micro_mouth_interval = std::time::Duration::from_millis(next);
+            self.micro_mouth_timer = std::time::Instant::now();
+        }
+        
+        (self.micro_brow_target, self.micro_cheek_target, self.micro_mouth_target)
+    }
+
+    /// Generate fallback params when face tracking is lost.
+    /// Returns cached params with decay toward neutral over 500ms.
+    fn generate_fallback_face(&mut self) -> Vec<(String, f32)> {
+        let lost_at = self.face_lost_at.get_or_insert_with(std::time::Instant::now);
+        let elapsed_ms = lost_at.elapsed().as_millis() as f32;
+        
+        // Decay factor: 1.0 at t=0, 0.0 at t=500ms
+        let decay = (1.0 - elapsed_ms / 500.0).max(0.0);
+        
+        if decay <= 0.0 {
+            // Fully decayed → neutral (zeros)
+            return vec![
+                ("EyesX".to_string(), 0.0),
+                ("EyesY".to_string(), 0.0),
+                ("EyeBlinkLeft".to_string(), 0.0),
+                ("EyeBlinkRight".to_string(), 0.0),
+                ("JawOpen".to_string(), 0.0),
+                ("HeadPitch".to_string(), 0.0),
+                ("HeadYaw".to_string(), 0.0),
+                ("HeadRoll".to_string(), 0.0),
+            ];
+        }
+        
+        // Scale last known params toward zero
+        self.last_face_params.iter()
+            .map(|(k, v)| (k.clone(), v * decay))
+            .collect()
+    }
+
     pub fn set_quality(&mut self, quality: &str) {
         // Tune Filter Parameters based on Quality
         // Ultra: Low Latency, High Jitter allowed (min_cutoff high)
@@ -212,10 +351,10 @@ impl Solver {
         // Low: Smooth, High Latency (min_cutoff low) OR Skip IK steps?
         
         let (mc, beta) = match quality {
-            "High" => (4.0, 0.05), // Very responsive
-            "Medium" => (1.5, 0.01), // Default
-            "Low" => (0.5, 0.001), // Very smooth/slow
-            _ => (1.5, 0.01),
+            "High" => (3.0, 0.02), // Precision: Fast but less jittery than 4.0
+            "Medium" => (1.0, 0.005), // Smooth: Standard daily use
+            "Low" => (0.5, 0.001), // Cinematic: Very slow/smooth
+            _ => (1.0, 0.005),
         };
         
         // Re-configure filters? 
@@ -447,7 +586,22 @@ impl Solver {
                 cal_face_data.insert("BlinkRight".to_string(), right_ratio);
             }
             
+            // --- Micro-Expressions (ambient face life) ---
+            let (micro_brow, micro_cheek, micro_mouth) = self.update_micro_expressions();
+            params.push(("BrowInnerUp".to_string(), micro_brow));
+            params.push(("CheekSquintLeft".to_string(), micro_cheek));
+            params.push(("CheekSquintRight".to_string(), micro_cheek));
+            params.push(("MouthCornerPullLeft".to_string(), micro_mouth.max(0.0)));
+            params.push(("MouthCornerPullRight".to_string(), (-micro_mouth).max(0.0)));
 
+            // Store last face params for fallback
+            self.last_face_params = params.clone();
+            self.face_lost_at = None; // Face is present — clear lost state
+
+        } else {
+            // Face tracking lost — generate fallback (freeze → decay to neutral)
+            let fallback = self.generate_fallback_face();
+            params.extend(fallback);
         }
 
         // Helper to get head transform (computed above)
@@ -577,11 +731,72 @@ impl Solver {
             let torso_rot = UnitQuaternion::from_euler_angles(0.0, 0.0, y_head * 0.5);
             let shoulder_pos = head_pos_m + torso_rot * shoulder_offset;
             
-            // 3. Solve IK
-            let pole = Vector3::new(sign * 0.2, -1.0, -0.3).normalize();
+            // 3. Solve IK with Dynamic Pole Vector (Natural Elbow)
+            // Heuristic:
+            // - Hand Low (rest): Elbow points Back (-Z)
+            // - Hand High/Front: Elbow points Down (-Y)
+            // - Hand Side: Elbow points Down/Back
+            
+            // Normalize hand height relative to shoulder (y is up/down, but here y is inverted?)
+            // Coordinates: +X Right, +Y Down (Screen), -Z Forward (towards cam)? 
+            // Let's check `process_hand` inputs:
+            // `wrist` is from `get_hvar(0)`.
+            // `hand_pos_m` coordinate system:
+            // x_hand = ((wrist.x - cx) / 600.0) * z_hand;
+            // y_hand = -((wrist.y - cy) / 600.0) * z_hand;
+            // Coordinate System inferred:
+            // +X = Right (of screen/image) -> User Left (Mirror)
+            // +Y = Up (since we negate y_px, and y_px increases downwards)
+            // -Z = Forward (away from camera, into scene)? No, z_hand is +?
+            // "z_hand = ... / size". z_hand is positive distance.
+            // hand_pos_m.z = -z_hand. So -Z is depth?
+            // VRChat expects: +Y Up, +Z Forward, +X Right.
+            // Rust Solver output:
+            // HeadPos_X = tx / 100.0.
+            // HeadPos_Y = -ty / 100.0.
+            // HeadPos_Z = -tz / 100.0.
+            // This suggests Y is inverted in Solver vs PnP?
+            
+            // Let's stick to the IK local space logic:
+            // Shoulder is at `shoulder_pos`.
+            // We want a Pole Vector.
+            // If Y is Up in this space (shoulder_offset y is -0.25... wait).
+            // `shoulder_offset = Vector3::new(sign * 0.15, -0.25, -0.05);`
+            // If +Y is Up, -0.25 means Shoulder is BELOW Head? Yes.
+            // So +Y is Up.
+            
+            // Logic:
+            // Hand Y < Shoulder Y (Lower): Elbow tends to -Z (Back)
+            // Hand Y > Shoulder Y (Higher): Elbow tends to -Y (Down... wait, elbows don't point up usually).
+            // Actually, if hand is high, elbow points Down/Out.
+            // If hand is low, elbow points Back.
+            
+            // Let's define Pole "Targets":
+            // Pole_Down = (0, -1, 0)
+            // Pole_Back = (0, 0, -1)
+            
+            // Interpolation factor based on Hand Y relative to Shoulder Y.
+            let rel_y = hand_pos_m.y - shoulder_pos.y; // Positive if hand is above shoulder
+            
+            // If rel_y is -0.5 (Hand 50cm below shoulder), factor = 1.0 (Back)
+            // If rel_y is 0.0 (Hand at shoulder), factor = 0.0 (Down)
+            
+            let t = (-rel_y * 2.0).clamp(0.0, 1.0); // 0.0 at shoulder, 1.0 at 50cm below
+            
+            // Interpolate
+            let pole_down = Vector3::new(0.0, -1.0, 0.0);
+            let pole_back = Vector3::new(0.0, 0.0, -1.0); // Z is forward?
+            // If Z is forward (positive), Back is -Z?
+            // `hand_pos_m.z = -z_hand`. z_hand is dist. So -Z is "into screen" / away from cam.
+            // VRChat: +Z is Forward.
+            // If we want elbow "Back" (behind user), that is -Z in VRChat.
+            // Assuming this coordinate system aligns roughly.
+            
+            let dynamic_pole = pole_down.lerp(&pole_back, t).normalize();
+            
             let shoulder_cm = shoulder_pos * 100.0;
             let hand_cm = hand_pos_m * 100.0;
-            let elbow_cm = self.arm_ik.solve(shoulder_cm, hand_cm, pole);
+            let elbow_cm = self.arm_ik.solve(shoulder_cm, hand_cm, dynamic_pole);
             let elbow_m = elbow_cm / 100.0;
 
             // 4. Dead Zone & Smoothing
@@ -664,13 +879,47 @@ impl Solver {
 
         if let Some(lh) = &data.left_hand_landmarks {
             let (p, t) = process_hand(lh, "HandLeft", true);
+            self.last_left_hand_params = p.clone();
+            self.left_hand_lost_at = None;
             params.extend(p);
             if let Some(tr) = t { trackers.push(tr); }
+        } else {
+            // Left hand lost — fallback
+            let lost_at = self.left_hand_lost_at.get_or_insert_with(std::time::Instant::now);
+            let elapsed_ms = lost_at.elapsed().as_millis() as f32;
+            if elapsed_ms < 200.0 {
+                // Freeze: hold last known pose
+                params.extend(self.last_left_hand_params.clone());
+            } else if elapsed_ms < 500.0 {
+                // Decay: blend toward zero
+                let decay = 1.0 - (elapsed_ms - 200.0) / 300.0;
+                let decayed: Vec<(String, f32)> = self.last_left_hand_params.iter()
+                    .map(|(k, v)| (k.clone(), v * decay))
+                    .collect();
+                params.extend(decayed);
+            }
+            // >500ms: stop emitting (idle)
         }
+
         if let Some(rh) = &data.right_hand_landmarks {
             let (p, t) = process_hand(rh, "HandRight", false);
+            self.last_right_hand_params = p.clone();
+            self.right_hand_lost_at = None;
             params.extend(p);
             if let Some(tr) = t { trackers.push(tr); }
+        } else {
+            // Right hand lost — fallback
+            let lost_at = self.right_hand_lost_at.get_or_insert_with(std::time::Instant::now);
+            let elapsed_ms = lost_at.elapsed().as_millis() as f32;
+            if elapsed_ms < 200.0 {
+                params.extend(self.last_right_hand_params.clone());
+            } else if elapsed_ms < 500.0 {
+                let decay = 1.0 - (elapsed_ms - 200.0) / 300.0;
+                let decayed: Vec<(String, f32)> = self.last_right_hand_params.iter()
+                    .map(|(k, v)| (k.clone(), v * decay))
+                    .collect();
+                params.extend(decayed);
+            }
         }
 
         SolverOutput { params, trackers }

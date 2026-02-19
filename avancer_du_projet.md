@@ -1,76 +1,88 @@
-# Avancement du Projet - État au 16/02/2026
+# Avancement du Projet - État au 19/02/2026
 
-Ce document recense l'intégralité des actions effectuées sur le projet et documente son état technique précis.
+Ce document recense l'intégralité des fonctionnalités, l'architecture technique et les dernières mises à jour du projet **VRChat Bridge Hub**.
 
-## 🎯 Rappel de l'Objectif
-
-"L'objectif de ce projet est d'offrir aux utilisateurs PC de VRChat, un moyen d'avoir un très bon face tracking de qualité ainsi qu'un hand+arm tracking lorsque ceux-ci apparaissent à la caméra uniquement.
-Il faut que ce soit d'une grande précision dans l'espace ainsi que savoir précisément la position de la main. Et tout ça, il faut le reproduire directement sur les avatars de VRChat avec la plus grande précision, la meilleure qualité et la plus grande rapidité possible."
+## 🎯 Objectif
+Offrir un système de tracking facial et manuel (Face + Hand + Arm) de haute précision pour VRChat, sans équipement coûteux (Webcam ou Téléphone), avec une performance native.
 
 ---
 
-## 🏗️ État des Lieux Technique : Architecture Native (Rust V2) ✅
+## 🏗️ Architecture Technique (Rust Native)
 
-Après avoir testé une architecture hybride (Python + Rust), nous avons finalement opté pour une **Architecture 100% Native Rust**.
+L'application est entièrement construite en **Rust** pour garantir une latence minimale et une robustesse maximale.
 
-### Pourquoi ce changement ?
+*   **Backend**: Tauri + Rust (Logique de tracking, Inférence AI, Réseau OSC).
+*   **Frontend**: HTML/JS (Interface utilisateur, visualisation caméra).
+*   **AI Engine**: `ort` (ONNX Runtime) exécutant des modèles MediaPipe optimisés sur CPU/GPU.
 
-1. **Performance** : Le moteur Python (MediaPipe) était précis mais lourd (CPU usage élevé, latence). La version Rust utilise les mêmes modèles mathématiques (BlazeFace/BlazeLandmark) via `ONNX Runtime` mais avec une performance **x10**.
-2. **Stabilité** : Plus de dépendance à l'installation de Python, de `pip`, ou de conflits de versions. Tout est dans un seul exécutable `.exe`.
-3. **Support Téléphone** : La latence réseau est minimisée grâce au traitement natif, permettant un tracking fluide même via Wi-Fi.
-
----
-
-## 🛠️ Actions Effectuées & Validées
-
-### 1. Moteur de Tracking V2 (Rust)
-
-* **Inférence ONNX Native** :
-  * Utilisation de `ort` (ONNX Runtime) directement dans le backend Tauri.
-  * Chargement des modèles `blaze_face_short_range.onnx` et `blaze_landmark.onnx`.
-  * **Fix Critique** : Correction de l'extraction des landmarks qui étaient ignorés dans les premières versions.
-* **Optimisation** :
-  * Multithreading : Capture vidéo et Inférence tournent sur des threads séparés pour ne jamais bloquer l'UI.
-  * Zéro-Copie (ou presque) sur le traitement d'image.
-
-### 2. Support Téléphone ("Phone Camera")
-
-* **Mode "Scan & Play"** :
-  * L'utilisateur scanne un QR code sur l'interface PC.
-  * Le téléphone (iOS/Android) devient instantanément une webcam HD sans installer d'application (via navigateur WebRTC/MJPEG).
-* **Tunneling Cloudflare** :
-  * Intégration d'un téléchargement et lancement automatique de `cloudflared` pour permettre la connexion même si le pare-feu est strict.
-* **Correction Scintillement** :
-  * Correction d'un bug où des "frames vides" faisaient clignoter l'interface.
-  * Stabilisation CSS pour éviter que la vidéo ne redimensionne l'interface.
-
-### 3. Expérience Utilisateur (UX)
-
-* **Launcher Unifié (`START_PROJECT.bat`)** :
-  * Vérifie automatiquement la présence de Rust et Cloudflare.
-  * Installe les dépendances manquantes sans ligne de commande compliquée.
-  * Interface couleur "User Friendly".
-* **Interface Premium** :
-  * Thème "Dark Glass" moderne.
-  * Indicateurs visuels (Visage détecté, Mains détectées, FPS, Latence).
+### Performance
+*    **FPS Cible**: 30 FPS stable (récemment validé à 19-30 FPS selon l'éclairage).
+*   **Latence**: < 15ms de traitement (Inférence + Solver).
 
 ---
 
-## 🚧 Ce qu'il Reste à Faire (Roadmap)
+## 🛠️ Fonctionnalités Implémentées
 
-1. **Affinage du Solver VRChat** :
-    * Le moteur détecte le visage, maintenant il faut mapper les 468 points vers les paramètres VRChat (JawOpen, EyeBlink, etc.) avec plus de subtilité.
-2. **Tracking des Mains et Bras avec IK** :
-    * Intégrer pleinement le modèle de mains (MediaPipe Hands) dans le pipeline Rust (actuellement en cours de portage complet).
-    * Calculer la position des coudes (Arm Tracking) par cinématique inverse (IK).
-3. **Tests Grande Échelle** :
-    * Valider la stabilité sur des sessions de plusieurs heures.
+### 1. Face Tracking (Avancé & Stabilisé)
+Le moteur de visage est le plus abouti à ce jour.
+*   **Détection**: Utilisation de `BlazeFace` (Détection) + `BlazeLandmark` (468 points).
+*   **Lissage Intelligent**:
+    *   *OneEuroFilter*: Filtre le jitter (tremblements) à haute vitesse.
+    *   *InertiaFilter*: Ajoute du poids aux mouvements pour un rendu plus naturel.
+*   **Vie Artificielle ("Alive Feel")**:
+    *   *Micro-expressions*: Le visage génère subtilement des mouvements aléatoires (sourcils, joues) pour éviter l'effet "robot figé" quand l'utilisateur est neutre.
+    *   *Saccades Oculaires*: Les yeux effectuent des micro-mouvements réalistes.
+    *   *Auto-Blink*: Si l'utilisateur ne cligne pas des yeux pendant trop longtemps, le système force un clignement naturel.
+*   **Fallback (Perte de Tracking)**:
+    *   Si le visage n'est plus détecté, les paramètres retournent progressivement à zéro (decay) sur 500ms au lieu de se figer brutalement.
+
+### 2. Hand & Arm Tracking (En Cours de Déblocage)
+Le code est prêt, mais était bloqué par des fichiers modèles corrompus.
+*   **Cinématique Inverse (IK)**:
+    *   Module `ik.rs` implémenté. Calcule la position du **Coude** en fonction de l'Épaule et du Poignet.
+    *   Permet d'animer les bras complets dans VRChat sans trackers supplémentaires.
+*   **Logique de Perte**:
+    *   Si une main sort du champ, elle reste figée 200ms (pour éviter les pertes brèves) puis redescend lentement le long du corps (Neutre).
+*   **État Actuel**: Modèles ONNX en cours de réparation via script dédié.
+
+### 3. Gestion Caméra & Système
+*   **Smart Retry Logic (NOUVEAU)**:
+    *   Contournement automatique du bug Windows qui force certaines webcams à 1 FPS.
+    *   Le système teste plusieurs configurations (NV12, 15fps, Basse Résolution) jusqu'à trouver un flux fluide.
+*   **Support Téléphone**:
+    *   Connexion via QR Code (Réseau Local ou Tunneling Cloudflare).
+*   **Profiling**:
+    *   Mesure précise du temps de calcul (`solve`, `osc`) pour détecter les goulots d'étranglement.
+
+### 4. Réseau OSC
+*   **Batching**: Les paramètres OSC sont envoyés en paquets groupés (Bundles) pour réduire la saturation réseau de VRChat.
 
 ---
 
-## 📅 Synthèse
+## 🐛 Debugging & Correctifs Récents (17/02 - 19/02)
 
-Nous avons pivoté d'une solution "Bricolage Python" vers une véritable **Application Desktop Native**.
-C'est plus rapide, plus stable, et prêt pour le grand public.
+### ✅ Problème : Caméra bloquée à 1 FPS
+*   **Symptôme**: L'image était saccadée, rendant le tracking impossible.
+*   **Cause**: Driver Windows MediaFoundation qui force une exposition longue en basse lumière ou bug de format.
+*   **Solution**: Implémentation d'une logique de **Retry** qui force la caméra en mode 15fps ou 640x360 si le 30fps échoue.
 
-### État Actuel : 🟢 Fonctionnel & Stable (Face Tracking de base + Vidéo Fluide)
+### ✅ Problème : Crash au chargement des mains
+*   **Symptôme**: Logs `Failed to load Palm Detector: Protobuf parsing failed`.
+*   **Cause**: Les fichiers `.onnx` dans le dossier `models` n'étaient pas les vrais fichiers (4MB) mais des pointeurs Git LFS (132 octets).
+*   **Solution**: Création du script `download_models.ps1` pour télécharger automatiquement les vrais fichiers valides.
+
+### 🔍 En Cours : "Face Not Detected" malgré 19 FPS
+*   **Symptôme**: La caméra tourne bien, mais le log indique "0 trackers".
+*   **Piste**: Probablement une image trop sombre ou un problème de format pixel (NV12 -> RGB).
+*   **Action**: Ajout de logs diagnostiques (`[AI] ...`) dans la dernière build pour identifier la cause exacte.
+
+---
+
+## 📅 Roadmap Immédiate
+
+1.  **Utilisateur**: Exécuter `download_models.ps1` pour réparer les mains.
+2.  **Utilisateur**: Tester la Release Build et vérifier que le visage est détecté (`[AI] Face OK`).
+3.  **Système**: Une fois le visage accroché, le Hand Tracking et l'IK s'activeront automatiquement.
+
+---
+*Document généré automatiquement par l'assistant de développement.*

@@ -468,4 +468,75 @@ mod tests {
         assert!(output.params.iter().any(|(k, _)| k == "EyeBlinkLeft"), "Should output EyeBlinkLeft");
         assert!(output.params.iter().any(|(k, _)| k == "EyeBlinkRight"), "Should output EyeBlinkRight");
     }
+
+    #[test]
+    fn test_micro_expressions() {
+        use crate::tracking::solver::Solver;
+        
+        let mut solver = Solver::new();
+        
+        // Call multiple times to cycle through PRNG
+        for _ in 0..10 {
+            let (brow, cheek, mouth) = solver.update_micro_expressions();
+            assert!(brow >= 0.0 && brow <= 0.05, "BrowInnerUp should be in [0, 0.05], got {}", brow);
+            assert!(cheek >= 0.0 && cheek <= 0.03, "CheekRaise should be in [0, 0.03], got {}", cheek);
+            assert!(mouth >= -0.02 && mouth <= 0.02, "MouthCorner should be in [-0.02, 0.02], got {}", mouth);
+        }
+    }
+
+    #[test]
+    fn test_face_fallback() {
+        use crate::tracking::solver::Solver;
+        use crate::tracking::types::TrackingData;
+        
+        let mut solver = Solver::new();
+        
+        // First, solve with face data to populate last_face_params
+        let mut landmarks = vec![[0.0f32; 3]; 468];
+        // Minimal valid face: nose tip at center, etc.
+        landmarks[1] = [0.5, 0.5, 0.0]; // Nose
+        landmarks[33] = [0.45, 0.45, 0.0];
+        landmarks[263] = [0.55, 0.45, 0.0];
+        landmarks[152] = [0.5, 0.6, 0.0]; // Chin
+        landmarks[61] = [0.48, 0.55, 0.0];
+        landmarks[291] = [0.52, 0.55, 0.0];
+        // Eyes
+        landmarks[159] = [0.46, 0.44, 0.0];
+        landmarks[145] = [0.46, 0.46, 0.0];
+        landmarks[33] = [0.44, 0.45, 0.0];
+        landmarks[133] = [0.48, 0.45, 0.0];
+        landmarks[386] = [0.54, 0.44, 0.0];
+        landmarks[374] = [0.54, 0.46, 0.0];
+        landmarks[362] = [0.52, 0.45, 0.0];
+        landmarks[263] = [0.56, 0.45, 0.0];
+        // Iris
+        landmarks[468 - 1] = [0.47, 0.45, 0.0]; // Approximate iris
+
+        let data_with_face = TrackingData {
+            face_landmarks: Some(landmarks),
+            left_hand_landmarks: None,
+            right_hand_landmarks: None,
+            head_rotation: None,
+        };
+        
+        let output_with = solver.solve(&data_with_face);
+        assert!(!output_with.params.is_empty(), "Should have params when face is present");
+        
+        // Now solve with NO face data — should produce fallback
+        let data_no_face = TrackingData {
+            face_landmarks: None,
+            left_hand_landmarks: None,
+            right_hand_landmarks: None,
+            head_rotation: None,
+        };
+        
+        let output_fallback = solver.solve(&data_no_face);
+        assert!(!output_fallback.params.is_empty(), "Fallback should produce params even without face");
+        
+        // Fallback params should exist (decayed from last known)
+        // At t=0 the decay factor is ~1.0, so values should be close to the originals
+        let has_any_face_param = output_fallback.params.iter()
+            .any(|(k, _)| k == "EyesX" || k == "HeadPitch" || k == "EyeBlinkLeft");
+        assert!(has_any_face_param, "Fallback should contain face-related params");
+    }
 }

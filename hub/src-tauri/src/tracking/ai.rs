@@ -94,22 +94,46 @@ impl InferenceEngine {
         
         let dyn_img = image::DynamicImage::ImageRgb8(image.clone());
 
+        // [DEBUG] Log Image Stats (Throttled?)
+        // Calculate mean brightness to see if image is black
+        let raw = image.as_raw();
+        let mut sum: u64 = 0;
+        // Sample every 100th pixel for speed
+        for i in (0..raw.len()).step_by(100) {
+            sum += raw[i] as u64;
+        }
+        let count = raw.len() / 100;
+        let mean = if count > 0 { sum as f32 / count as f32 } else { 0.0 };
+        
+        // Print stats occasionally
+        if rand::random::<f32>() < 0.05 {
+             println!("[AI] Input Stats: {}x{} mean_brightness={:.1} (0=black)", dyn_img.width(), dyn_img.height(), mean);
+        }
+
         // --- FACE ---
         let mut face_landmarks = None;
         if let Some(detector) = &mut self.detector {
             let detections = detector.detect(&dyn_img)?;
             if !detections.is_empty() {
                 if let Some(landmark_model) = &mut self.landmark_model {
-                    // Process biggest face
                     let detection = &detections[0]; 
                     let (_, config) = get_face_short_range_config();
                     let (xc, yc, scale, theta) = detection2roi(&detection, &config);
                     
-                    if let Ok((landmarks, _score, _)) = landmark_model.predict(&dyn_img, xc, yc, scale, theta) {
-                        let points: Vec<[f32; 3]> = landmarks.iter().map(|p| [p.0, p.1, p.2]).collect();
-                        face_landmarks = Some(points);
+                    match landmark_model.predict(&dyn_img, xc, yc, scale, theta) {
+                        Ok((landmarks, score, _)) => {
+                            let points: Vec<[f32; 3]> = landmarks.iter().map(|p| [p.0, p.1, p.2]).collect();
+                            println!("[AI] Face OK: {} landmarks, score={:.2}", points.len(), score);
+                            face_landmarks = Some(points);
+                        },
+                        Err(e) => {
+                            println!("[AI] Face landmark predict failed: {}", e);
+                        }
                     }
                 }
+            } else {
+                // No face detected in this frame
+                println!("[AI] No face detected (0 detections) | Img: {}x{}", dyn_img.width(), dyn_img.height());
             }
         }
 

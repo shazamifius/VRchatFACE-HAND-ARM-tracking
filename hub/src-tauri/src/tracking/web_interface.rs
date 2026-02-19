@@ -121,6 +121,16 @@ impl WebInterface {
             }
         }
     }
+
+    // [NEW] Emit OSC Data for Visual Monitor
+    pub fn emit_osc_data(&self, params: &Vec<(String, f32)>) {
+        if let Ok(guard) = self.app_handle.lock() {
+            if let Some(app) = &*guard {
+                // Convert to HashMap or just send Vec? Vec is fine.
+                let _ = app.emit("osc-data", params);
+            }
+        }
+    }
 }
 
 async fn index_handler() -> Html<&'static str> {
