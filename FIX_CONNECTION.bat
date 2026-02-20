@@ -1,0 +1,3 @@
+@echo off
+echo Requesting Administrator privileges to fix network settings...
+powershell -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"%~dp0hub\fix_network.ps1\"'"
