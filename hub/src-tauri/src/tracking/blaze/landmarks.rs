@@ -57,7 +57,8 @@ impl BlazeLandmark {
 
         // 3. Inference
         let input_value = ort::value::Value::from_array(input_tensor)?;
-        let inputs = ort::inputs!["input" => input_value];
+        let input_name = self.session.inputs()[0].name().to_string();
+        let inputs = ort::inputs![input_name => input_value];
         let outputs = self.session.run(inputs)?;
 
         // 4. Extract

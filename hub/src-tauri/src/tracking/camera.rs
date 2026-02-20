@@ -279,7 +279,7 @@ impl CameraManager {
              }
         }
 
-        let camera = if let Some(cam) = final_camera {
+        let mut camera = if let Some(cam) = final_camera {
             cam
         } else {
              println!("[Rust] All attempts failed. Falling back to simple request.");
@@ -293,18 +293,17 @@ impl CameraManager {
         };
 
         // --- DISABLE AUTO EXPOSURE (Classic 1 FPS Fix) ---
-        // (Commented out due to compilation errors with nokhwa 0.10.x control API)
-        /*
-        println!("[Rust] Attempting to disable Auto-Exposure...");
-        if let Err(e) = camera.set_camera_control(KnownCameraControl::AutoExposure, ControlValue::Manual(0)) {
-             println!("[Rust] Failed to set AutoExposure to Manual(0): {}", e);
+        println!("[Rust] Attempting to disable Auto-Exposure for performance...");
+        use nokhwa::utils::{KnownCameraControl, ControlValueSetter};
+        if let Err(e) = camera.set_camera_control(KnownCameraControl::Exposure, ControlValueSetter::Boolean(false)) {
+             println!("[Rust] Failed to set AutoExposure to False: {}", e);
         } else {
-            println!("[Rust] AutoExposure set to Manual(0)");
+            println!("[Rust] AutoExposure set to False (Manual)");
         }
-        */
         
-        // Also set Exposure Time to something low? 
-        // Need to check specific controls. For now, let's assume switching to MJPEG or disabling AutoExposure helps.
+        // Also try to set a reasonable exposure time if it's manual now?
+        // Some cameras need a small exposure value to hit 30fps.
+        // camera.set_camera_control(KnownCameraControl::Exposure, ControlValueSetter::Integer(5000)); 
 
         let final_fmt = camera.camera_format();
         println!("[Rust] Camera Started! Final format: {}x{} {:?} @ {}fps", 
@@ -313,6 +312,7 @@ impl CameraManager {
             
         if final_fmt.frame_rate() < 15 {
              println!("[Rust] WARNING: Still low FPS. Tracking WILL suffer.");
+             println!("[Rust] TIP: Try another USB port or check Windows Privacy Settings.");
         }
 
         self.camera = Some(camera);

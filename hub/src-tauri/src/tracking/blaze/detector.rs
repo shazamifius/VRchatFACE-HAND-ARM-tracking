@@ -35,12 +35,12 @@ impl BlazeDetector {
         // 1. Preprocess
         let (resized_img, scale, (pad_w, pad_h)) = resize_pad(image, self.input_size.0 as u32, self.input_size.1 as u32);
         
-        // Convert to Tensor [1, H, W, 3] (Float32, normalized -1..1)
+        // Convert to Tensor [1, H, W, 3] (Float32, normalized 0..1)
         let mut input_tensor = Array4::<f32>::zeros((1, self.input_size.1, self.input_size.0, 3));
         for (x, y, pixel) in resized_img.pixels() {
-            let r = (pixel[0] as f32 / 127.5) - 1.0;
-            let g = (pixel[1] as f32 / 127.5) - 1.0;
-            let b = (pixel[2] as f32 / 127.5) - 1.0;
+            let r = pixel[0] as f32 / 255.0;
+            let g = pixel[1] as f32 / 255.0;
+            let b = pixel[2] as f32 / 255.0;
             input_tensor[[0, y as usize, x as usize, 0]] = r;
             input_tensor[[0, y as usize, x as usize, 1]] = g;
             input_tensor[[0, y as usize, x as usize, 2]] = b;
@@ -49,7 +49,8 @@ impl BlazeDetector {
         // 2. Inference
         // Create ORT value from array (takes ownership or view, here we give ownership of the array)
         let input_value = ort::value::Value::from_array(input_tensor)?;
-        let inputs = ort::inputs!["input" => input_value]; 
+        let input_name = self.session.inputs()[0].name().to_string();
+        let inputs = ort::inputs![input_name => input_value]; 
         let outputs = self.session.run(inputs)?;
 
         // 3. Extract Outputs
