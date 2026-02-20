@@ -44,8 +44,8 @@ impl InferenceEngine {
 
         // 2. Load Face Landmark
         if mesh_path.exists() {
-             // Face Mesh V2: 192x192, 468 landmarks, 3 dims
-             match BlazeLandmark::new(mesh_path.to_str().unwrap(), 192, 468, 3) {
+             // Face Mesh V2 (Short Range/Lite): 128x128, 468 landmarks, 3 dims
+             match BlazeLandmark::new(mesh_path.to_str().unwrap(), 128, 468, 3) {
                  Ok(lm) => {
                      self.landmark_model = Some(lm);
                      println!("[Rust] Face BlazeLandmark loaded.");
@@ -123,7 +123,9 @@ impl InferenceEngine {
                     match landmark_model.predict(&dyn_img, xc, yc, scale, theta) {
                         Ok((landmarks, score, _)) => {
                             let points: Vec<[f32; 3]> = landmarks.iter().map(|p| [p.0, p.1, p.2]).collect();
-                            println!("[AI] Face OK: {} landmarks, score={:.2}", points.len(), score);
+                            if rand::random::<f32>() < 0.1 {
+                                println!("[AI] Face OK: {} landmarks, score={:.2}", points.len(), score);
+                            }
                             face_landmarks = Some(points);
                         },
                         Err(e) => {

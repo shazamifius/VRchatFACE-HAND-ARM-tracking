@@ -59,6 +59,8 @@ pub struct TrackingStatus {
     pub model_loaded: bool,
     pub camera_name: String,
     pub camera_fps_real: f32, // Actual FPS from camera thread
+    pub camera_width: u32,
+    pub camera_height: u32,
 }
 
 /// Raw tracking data from the AI engine (Python/Rust)

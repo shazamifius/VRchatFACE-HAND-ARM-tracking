@@ -58,9 +58,9 @@ pub fn decode_boxes(
 
     for (i, anchor) in anchors.iter().enumerate() {
         let score_offset = i * config.num_classes;
+        if score_offset >= raw_scores.len() { break; }
         
         // Find max score for this anchor
-        // optimization: if only 1 class, simpler
         let score_raw = raw_scores[score_offset];
         // Sigmoid
         let score_val = 1.0 / (1.0 + (-score_raw.clamp(-100.0, 100.0)).exp()); 
@@ -70,7 +70,7 @@ pub fn decode_boxes(
         }
 
         let box_offset = i * config.num_coords;
-        // Box format: [y_center, x_center, h, w, keypoints...]
+        if box_offset + 3 >= raw_boxes.len() { break; }
         
         let cy = raw_boxes[box_offset] / config.y_scale * anchor.h + anchor.y_center;
         let cx = raw_boxes[box_offset + 1] / config.x_scale * anchor.w + anchor.x_center;

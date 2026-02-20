@@ -7,22 +7,36 @@ use crate::tracking::blaze::utils::{extract_roi, denormalize_landmarks};
 pub struct BlazeLandmark {
     session: Session,
     input_size: (usize, usize), 
-    num_landmarks: usize,
     num_dims: usize, // 2 or 3 (x, y, [z])
+    is_nchw: bool,
 }
 
 impl BlazeLandmark {
-    pub fn new(model_path: &str, input_size: usize, num_landmarks: usize, num_dims: usize) -> Result<Self> {
+    pub fn new(model_path: &str, input_size: usize, _num_landmarks: usize, num_dims: usize) -> Result<Self> {
         let session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .with_intra_threads(4)?
             .commit_from_file(model_path)?;
 
+        let mut is_nchw = true;
+        if let Some(input) = session.inputs().get(0) {
+            let name = input.name();
+            // In MediaPipe models:
+            // - NCHW models usually have input name "input" or "data" and shape [1, 3, H, W]
+            // - NHWC models (often converted for TFLite/Edge) have name "input_1" and shape [1, H, W, 3]
+            if name.contains("_1") || name.to_lowercase().contains("nhwc") {
+                is_nchw = false;
+                println!("[Rust] Model '{}' detected as NHWC.", name);
+            } else {
+                println!("[Rust] Model '{}' detected as NCHW.", name);
+            }
+        }
+
         Ok(Self {
             session,
             input_size: (input_size, input_size),
-            num_landmarks,
             num_dims,
+            is_nchw,
         })
     }
 
@@ -45,14 +59,27 @@ impl BlazeLandmark {
         // Let's check blazelandmark.py -> preprocess -> return x / 255.0
         // blazedetector was -1..1
         
-        let mut input_tensor = Array4::<f32>::zeros((1, self.input_size.1, self.input_size.0, 3));
+        // Create tensor based on layout
+        let mut input_tensor = if self.is_nchw {
+            Array4::<f32>::zeros((1, 3, self.input_size.1, self.input_size.0))
+        } else {
+            Array4::<f32>::zeros((1, self.input_size.1, self.input_size.0, 3))
+        };
+
         for (x, y, pixel) in roi_img.pixels() {
             let r = pixel[0] as f32 / 255.0;
             let g = pixel[1] as f32 / 255.0;
             let b = pixel[2] as f32 / 255.0;
-            input_tensor[[0, y as usize, x as usize, 0]] = r;
-            input_tensor[[0, y as usize, x as usize, 1]] = g;
-            input_tensor[[0, y as usize, x as usize, 2]] = b;
+            
+            if self.is_nchw {
+                input_tensor[[0, 0, y as usize, x as usize]] = r;
+                input_tensor[[0, 1, y as usize, x as usize]] = g;
+                input_tensor[[0, 2, y as usize, x as usize]] = b;
+            } else {
+                input_tensor[[0, y as usize, x as usize, 0]] = r;
+                input_tensor[[0, y as usize, x as usize, 1]] = g;
+                input_tensor[[0, y as usize, x as usize, 2]] = b;
+            }
         }
 
         // 3. Inference
@@ -73,9 +100,13 @@ impl BlazeLandmark {
         // out_flag_idx = output_details[1]['index']
         // So it matches.
 
-        let (_shape_lm, landmarks_slice) = outputs[0].try_extract_tensor::<f32>()?;
+        let (shape_lm, landmarks_slice) = outputs[0].try_extract_tensor::<f32>()?;
         let (_shape_score, score_slice) = outputs[1].try_extract_tensor::<f32>()?; // flag
         let score_val = score_slice[0];
+
+        if rand::random::<f32>() < 0.01 {
+             println!("[AI] Landmark Output Shape: {:?} | Slice Len: {}", shape_lm, landmarks_slice.len());
+        }
 
         let mut handedness_val = None;
         if outputs.len() >= 3 {
@@ -100,17 +131,17 @@ impl BlazeLandmark {
         let mut landmarks_roi_2d = Vec::new();
         let mut z_coords = Vec::new();
         
-        for i in 0..self.num_landmarks {
+        let num_pts = landmarks_slice.len() / self.num_dims;
+        if num_pts == 0 { return Err(anyhow::anyhow!("No landmarks in output tensor")); }
+
+        for i in 0..num_pts {
             let offset = i * self.num_dims;
-            // Check bounds to be safe
-            if offset + 1 < landmarks_slice.len() {
-                let lx = landmarks_slice[offset];
-                let ly = landmarks_slice[offset+1];
-                let lz = if self.num_dims > 2 && offset + 2 < landmarks_slice.len() { landmarks_slice[offset+2] } else { 0.0 };
-                
-                landmarks_roi_2d.push((lx, ly));
-                z_coords.push(lz);
-            }
+            let lx = landmarks_slice[offset];
+            let ly = landmarks_slice[offset+1];
+            let lz = if self.num_dims > 2 { landmarks_slice[offset+2] } else { 0.0 };
+            
+            landmarks_roi_2d.push((lx, ly));
+            z_coords.push(lz);
         }
 
         let landmarks_orig_2d = denormalize_landmarks(

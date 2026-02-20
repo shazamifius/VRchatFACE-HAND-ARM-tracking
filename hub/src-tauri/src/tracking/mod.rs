@@ -219,7 +219,17 @@ impl TrackingEngine {
                          crate::logging::log(&format!("[Rust] Failed to start camera: {}", e)); 
                          return; 
                      }
-                      crate::logging::log("[Rust] Camera started.");
+                      if let Ok(mut s) = status_capture.lock() {
+                          if true {
+                              if let Some(c) = &cam.camera {
+                                  let fmt = c.camera_format();
+                                  s.camera_width = fmt.resolution().width();
+                                  s.camera_height = fmt.resolution().height();
+                                  s.camera_fps_real = fmt.frame_rate() as f32;
+                              }
+                          }
+                      }
+                       crate::logging::log("[Rust] Camera started.");
                  }
              }
 
@@ -242,12 +252,19 @@ impl TrackingEngine {
                             let mut status_guard = status_capture.lock().unwrap();
                             status_guard.phone_connected = true;
                             status_guard.latency_ms = 50; 
-                            drop(status_guard);
 
                             // 2. Decode JPEG to ImageBuffer
                             match image::load_from_memory(&data) {
-                                Ok(dyn_img) => Ok(dyn_img.to_rgb8()),
-                                Err(e) => Err(anyhow::anyhow!("Failed to decode remove frame: {}", e)),
+                                Ok(dyn_img) => {
+                                    status_guard.camera_width = dyn_img.width();
+                                    status_guard.camera_height = dyn_img.height();
+                                    drop(status_guard);
+                                    Ok(dyn_img.to_rgb8())
+                                },
+                                Err(e) => {
+                                    drop(status_guard);
+                                    Err(anyhow::anyhow!("Failed to decode remove frame: {}", e))
+                                },
                             }
                         },
                         None => {

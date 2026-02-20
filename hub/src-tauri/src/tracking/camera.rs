@@ -7,7 +7,7 @@ use crate::tracking::types::{CameraInfo, CameraConfig};
 use std::collections::HashSet;
 
 pub struct CameraManager {
-    camera: Option<Camera>,
+    pub camera: Option<Camera>,
     pub current_config: Option<CameraConfig>,
 }
 
@@ -23,14 +23,7 @@ impl CameraManager {
     pub fn get_cameras(&self) -> Vec<CameraInfo> {
         let mut final_list: Vec<CameraInfo> = Vec::new();
         let mut seen_paths = HashSet::new();
-
-        // 1. Define Backends to Query
-        let backends = vec![
-            ApiBackend::Auto,
-            ApiBackend::MediaFoundation,
-            ApiBackend::Video4Linux, // Will be ignored on Windows usually
-            // ApiBackend::DirectShow, // Requires feature
-        ];
+ 
         // [FIX] Add Python Bridge FIRST so it is default
         final_list.push(CameraInfo {
             index: 999,
@@ -42,8 +35,11 @@ impl CameraManager {
             formats: None,
         });
 
-        // We clone to iterate
-        let backends_to_try = backends.clone();
+        // 1. Define Backends to Query
+        #[cfg(target_os = "windows")]
+        let backends_to_try = vec![ApiBackend::MediaFoundation, ApiBackend::Auto];
+        #[cfg(not(target_os = "windows"))]
+        let backends_to_try = vec![ApiBackend::Auto];
 
         for backend in backends_to_try {
             if let Ok(cams) = nokhwa::query(backend) {
@@ -157,9 +153,14 @@ impl CameraManager {
 
         // Step 1: Enumeration to find best "theoretical" format
         // We prioritize MJPEG > YUYV > NV12 because NV12 might be slow to decode or buggy in some backends
-        let probe = RequestedFormat::new::<RgbFormat>(RequestedFormatType::None);
-        let mut probe_cam = Camera::new(index.clone(), probe)
-            .map_err(|e| anyhow!("Cannot open camera: {}", e))?;
+        
+        #[cfg(target_os = "windows")]
+        let probe_backend = ApiBackend::MediaFoundation;
+        #[cfg(not(target_os = "windows"))]
+        let probe_backend = ApiBackend::Auto;
+
+        let mut probe_cam = Camera::with_backend(index.clone(), RequestedFormat::new::<RgbFormat>(RequestedFormatType::None), probe_backend)
+            .map_err(|e| anyhow!("Cannot open camera with backend {:?}: {}", probe_backend, e))?;
 
         let best_format = if let Ok(formats) = probe_cam.compatible_camera_formats() {
             println!("[Rust] Camera supports {} formats:", formats.len());
@@ -201,8 +202,14 @@ impl CameraManager {
         // Step 2: Open Camera with Retry Logic
         
         let try_open = |camera_idx: CameraIndex, req: RequestedFormat| -> Result<Camera> {
-             let mut cam = Camera::new(camera_idx, req)
-                .map_err(|e| anyhow!("Camera create failed: {}", e))?;
+             #[cfg(target_os = "windows")]
+             let backend = ApiBackend::MediaFoundation;
+             #[cfg(not(target_os = "windows"))]
+             let backend = ApiBackend::Auto;
+
+             let mut cam = Camera::with_backend(camera_idx, req, backend)
+                .map_err(|e| anyhow!("Camera create failed ({:?}): {}", backend, e))?;
+             
              cam.open_stream()
                 .map_err(|e| anyhow!("Stream open failed: {}", e))?;
              Ok(cam)
@@ -246,15 +253,20 @@ impl CameraManager {
              );
              let req = RequestedFormat::new::<RgbFormat>(RequestedFormatType::Closest(attempt_fmt));
              
-             if let Ok(cam) = try_open(index.clone(), req) {
-                 let f = cam.camera_format();
-                 if f.frame_rate() >= 15 { 
-                     fps_ok = true; 
-                     final_camera = Some(cam);
-                     println!("[Rust] Attempt 2 Successful! MJPEG {}fps", f.frame_rate());
-                 } else {
-                     println!("[Rust] Attempt 2 yielded low FPS: {}", f.frame_rate());
-                     final_camera = Some(cam); 
+             match try_open(index.clone(), req) {
+                 Ok(cam) => {
+                     let f = cam.camera_format();
+                     if f.frame_rate() >= 15 { 
+                         fps_ok = true; 
+                         final_camera = Some(cam);
+                         println!("[Rust] Attempt 2 Successful! MJPEG {}fps", f.frame_rate());
+                     } else {
+                         println!("[Rust] Attempt 2 yielded low FPS: {}", f.frame_rate());
+                         final_camera = Some(cam); 
+                     }
+                 },
+                 Err(e) => {
+                     println!("[Rust] Attempt 2 (MJPEG) failed: {}", e);
                  }
              }
         }
@@ -296,9 +308,32 @@ impl CameraManager {
         println!("[Rust] Attempting to disable Auto-Exposure for performance...");
         use nokhwa::utils::{KnownCameraControl, ControlValueSetter};
         if let Err(e) = camera.set_camera_control(KnownCameraControl::Exposure, ControlValueSetter::Boolean(false)) {
-             println!("[Rust] Failed to set AutoExposure to False: {}", e);
+            println!("[Rust] Warning: Failed to set AutoExposure to False: {}", e);
         } else {
             println!("[Rust] AutoExposure set to False (Manual)");
+        }
+        
+        // Backend specific exposure tuning
+        let backend = camera.backend();
+        println!("[Rust] Camera Backend Detect: {:?}", backend);
+        
+        let exposure_val = match backend {
+            nokhwa::utils::ApiBackend::MediaFoundation => ControlValueSetter::Integer(-6), 
+            _ => {
+                // Heuristic: If we are on Windows and it's Auto, it's likely MF
+                if cfg!(target_os = "windows") {
+                    ControlValueSetter::Integer(-6)
+                } else {
+                    ControlValueSetter::Integer(2500)
+                }
+            }
+        };
+
+        let exposure_desc = format!("{:?}", exposure_val);
+        if let Err(e) = camera.set_camera_control(KnownCameraControl::Exposure, exposure_val) {
+            println!("[Rust] Note: Exposure manual tuning skipped: {}", e);
+        } else {
+            println!("[Rust] Exposure tuned for performance ({}).", exposure_desc);
         }
         
         // Also try to set a reasonable exposure time if it's manual now?

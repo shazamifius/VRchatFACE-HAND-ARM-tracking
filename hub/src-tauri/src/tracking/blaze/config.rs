@@ -220,7 +220,7 @@ pub fn get_palm_detection_config() -> (AnchorOptions, BlazeConfig) {
         input_size_width: 192,
         anchor_offset_x: 0.5,
         anchor_offset_y: 0.5,
-        strides: vec![4, 8, 16, 32], 
+        strides: vec![8, 16, 16, 16], // [8, 16, 16, 16] yields 2016 anchors with 192x192 input
         aspect_ratios: vec![1.0], 
         reduce_boxes_in_lowest_layer: false, 
         interpolated_scale_aspect_ratio: 1.0,

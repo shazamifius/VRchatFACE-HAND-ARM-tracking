@@ -10,6 +10,7 @@ pub struct BlazeDetector {
     config: BlazeConfig,
     anchors: Vec<Anchor>,
     input_size: (usize, usize), // (w, h)
+    is_nchw: bool,
 }
 
 impl BlazeDetector {
@@ -22,11 +23,23 @@ impl BlazeDetector {
 
         let anchors = generate_anchors(&anchor_options);
         
+        let mut is_nchw = true;
+        if let Some(input) = session.inputs().get(0) {
+            let name = input.name();
+            if name.contains("_1") || name.to_lowercase().contains("nhwc") {
+                is_nchw = false;
+                println!("[Rust] Detector model '{}' detected as NHWC.", name);
+            } else {
+                println!("[Rust] Detector model '{}' detected as NCHW.", name);
+            }
+        }
+
         Ok(Self {
             session,
             config,
             anchors,
             input_size: (anchor_options.input_size_width, anchor_options.input_size_height),
+            is_nchw,
         })
     }
 
@@ -35,15 +48,27 @@ impl BlazeDetector {
         // 1. Preprocess
         let (resized_img, scale, (pad_w, pad_h)) = resize_pad(image, self.input_size.0 as u32, self.input_size.1 as u32);
         
-        // Convert to Tensor [1, H, W, 3] (Float32, normalized 0..1)
-        let mut input_tensor = Array4::<f32>::zeros((1, self.input_size.1, self.input_size.0, 3));
+        // Create tensor based on detected/assumed layout
+        let mut input_tensor = if self.is_nchw {
+            Array4::<f32>::zeros((1, 3, self.input_size.1, self.input_size.0))
+        } else {
+            Array4::<f32>::zeros((1, self.input_size.1, self.input_size.0, 3))
+        };
+
         for (x, y, pixel) in resized_img.pixels() {
             let r = pixel[0] as f32 / 255.0;
             let g = pixel[1] as f32 / 255.0;
             let b = pixel[2] as f32 / 255.0;
-            input_tensor[[0, y as usize, x as usize, 0]] = r;
-            input_tensor[[0, y as usize, x as usize, 1]] = g;
-            input_tensor[[0, y as usize, x as usize, 2]] = b;
+            
+            if self.is_nchw {
+                input_tensor[[0, 0, y as usize, x as usize]] = r;
+                input_tensor[[0, 1, y as usize, x as usize]] = g;
+                input_tensor[[0, 2, y as usize, x as usize]] = b;
+            } else {
+                input_tensor[[0, y as usize, x as usize, 0]] = r;
+                input_tensor[[0, y as usize, x as usize, 1]] = g;
+                input_tensor[[0, y as usize, x as usize, 2]] = b;
+            }
         }
 
         // 2. Inference

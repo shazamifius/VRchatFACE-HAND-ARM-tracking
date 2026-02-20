@@ -38,6 +38,7 @@ const elements = {
   calibNeutralBtn: document.getElementById('calib-neutral-btn'),
   calibTPoseBtn: document.getElementById('calib-tpose-btn'),
   phoneModeBtn: document.getElementById('phone-mode-btn'),
+  toggleMirror: document.getElementById('toggle-mirror'),
 };
 
 const ctx = elements.landmarkCanvas ? elements.landmarkCanvas.getContext('2d') : null;
@@ -73,6 +74,7 @@ function setupEventListeners() {
   elements.refreshCamerasBtn.addEventListener('click', refreshCameras);
   elements.cameraSelect.addEventListener('change', onCameraChange);
   elements.phoneModeBtn.addEventListener('click', setupPhoneMode);
+  elements.toggleMirror.addEventListener('change', updateMirrorMode);
 
   elements.toggleFace.addEventListener('change', updateModuleStatus);
   elements.toggleHands.addEventListener('change', updateModuleStatus);
@@ -280,8 +282,14 @@ const HAND_CONNECTIONS = [
 
 async function startVideoStream() {
   elements.videoPlaceholder.classList.add('hidden');
+  if (elements.videoFrame) {
+    elements.videoFrame.src = "http://localhost:9001/stream";
+    elements.videoFrame.classList.add('active');
+  }
   if (elements.landmarkCanvas) elements.landmarkCanvas.classList.add('active');
   elements.videoOverlay.classList.add('active');
+
+  updateMirrorMode(); // Ensure mirror state is applied
 
   if (renderInterval) clearInterval(renderInterval);
   renderInterval = setInterval(renderLoop, 50); // ~20 FPS for visualization
@@ -290,6 +298,11 @@ async function startVideoStream() {
 function stopVideoStream() {
   if (renderInterval) clearInterval(renderInterval);
   renderInterval = null;
+
+  if (elements.videoFrame) {
+    elements.videoFrame.src = "";
+    elements.videoFrame.classList.remove('active');
+  }
 
   // Clear canvas
   if (ctx && elements.landmarkCanvas) {
@@ -346,9 +359,8 @@ async function renderLoop() {
       const W = elements.landmarkCanvas.width;
       const H = elements.landmarkCanvas.height;
 
-      // Clear with dark background
-      ctx.fillStyle = '#0a0a0f';
-      ctx.fillRect(0, 0, W, H);
+      // Clear canvas (Transparent)
+      ctx.clearRect(0, 0, W, H);
 
       // Draw grid (subtle)
       ctx.strokeStyle = 'rgba(255,255,255,0.04)';
@@ -363,10 +375,9 @@ async function renderLoop() {
       // Draw face landmarks
       if (trackingData && trackingData.face_landmarks) {
         const pts = trackingData.face_landmarks;
-        // Scale landmarks from camera coords to canvas
-        // Landmarks are in pixel coords of the camera frame
-        const camW = status ? (status.fps > 0 ? 1920 : 640) : 640; // Approximate
-        const camH = status ? (status.fps > 0 ? 1080 : 480) : 480;
+        // Scale landmarks from actual camera resolution reported by backend
+        const camW = status?.camera_width || 640;
+        const camH = status?.camera_height || 480;
         const scaleX = W / camW;
         const scaleY = H / camH;
 
@@ -461,6 +472,17 @@ function drawHand(pts, color, label) {
 function updateIndicator(el, active) {
   if (active) el.classList.add('active');
   else el.classList.remove('active');
+}
+
+function updateMirrorMode() {
+  const isMirrored = elements.toggleMirror.checked;
+  if (isMirrored) {
+    elements.videoFrame.classList.add('mirror');
+    elements.landmarkCanvas.classList.add('mirror');
+  } else {
+    elements.videoFrame.classList.remove('mirror');
+    elements.landmarkCanvas.classList.remove('mirror');
+  }
 }
 
 

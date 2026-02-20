@@ -259,13 +259,29 @@ body {
   object-fit: contain;
   display: none;
   min-height: 480px;
-  /* [FIX] Prevent collapse */
   background: #000;
-  /* [FIX] Reduce white flash */
+}
+
+#landmark-canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  pointer-events: none;
+  background: transparent !important;
 }
 
 .video-frame.active {
   display: block;
+}
+
+/* Mirror Support */
+.mirror {
+  transform: translate(-50%, -50%) scaleX(-1) !important;
+}
+img.mirror {
+  transform: scaleX(-1) !important;
 }
 
 .video-placeholder {
