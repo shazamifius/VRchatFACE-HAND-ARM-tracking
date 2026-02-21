@@ -61,6 +61,9 @@ pub struct TrackingStatus {
     pub camera_fps_real: f32, // Actual FPS from camera thread
     pub camera_width: u32,
     pub camera_height: u32,
+    // Diagnostics
+    pub diagnostic_message: Option<String>,
+    pub mean_brightness: f32,
 }
 
 /// Raw tracking data from the AI engine (Python/Rust)

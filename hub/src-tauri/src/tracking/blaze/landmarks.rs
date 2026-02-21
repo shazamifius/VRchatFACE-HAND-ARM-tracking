@@ -21,10 +21,8 @@ impl BlazeLandmark {
         let mut is_nchw = true;
         if let Some(input) = session.inputs().get(0) {
             let name = input.name();
-            // In MediaPipe models:
-            // - NCHW models usually have input name "input" or "data" and shape [1, 3, H, W]
-            // - NHWC models (often converted for TFLite/Edge) have name "input_1" and shape [1, H, W, 3]
-            if name.contains("_1") || name.to_lowercase().contains("nhwc") {
+            println!("[Rust] Landmark input name: {}", name);
+            if name.contains("_1") || name.contains(".1") || name.to_lowercase().contains("nhwc") {
                 is_nchw = false;
                 println!("[Rust] Model '{}' detected as NHWC.", name);
             } else {
@@ -104,7 +102,7 @@ impl BlazeLandmark {
         let (_shape_score, score_slice) = outputs[1].try_extract_tensor::<f32>()?; // flag
         let score_val = score_slice[0];
 
-        if rand::random::<f32>() < 0.01 {
+        if true {
              println!("[AI] Landmark Output Shape: {:?} | Slice Len: {}", shape_lm, landmarks_slice.len());
         }
 

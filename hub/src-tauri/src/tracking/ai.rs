@@ -86,25 +86,31 @@ impl InferenceEngine {
     }
 
     /// Run full pipeline: Face + Hands
-    /// Returns: (Face, LeftHand, RightHand)
+    /// Returns: (Face, LeftHand, RightHand, MeanBrightness, Diagnostic)
     pub fn run_inference(
         &mut self, 
         image: &ImageBuffer<Rgb<u8>, Vec<u8>>
-    ) -> Result<(Option<Vec<[f32; 3]>>, Option<Vec<[f32; 3]>>, Option<Vec<[f32; 3]>>)> {
+    ) -> Result<(Option<Vec<[f32; 3]>>, Option<Vec<[f32; 3]>>, Option<Vec<[f32; 3]>>, f32, Option<String>)> {
         
         let dyn_img = image::DynamicImage::ImageRgb8(image.clone());
 
-        // [DEBUG] Log Image Stats (Throttled?)
-        // Calculate mean brightness to see if image is black
+        // --- BRIGHTNESS DIAGNOSTIC ---
         let raw = image.as_raw();
         let mut sum: u64 = 0;
-        // Sample every 100th pixel for speed
-        for i in (0..raw.len()).step_by(100) {
+        let step = 100; // Sample every 100th pixel for speed
+        for i in (0..raw.len()).step_by(step) {
             sum += raw[i] as u64;
         }
-        let count = raw.len() / 100;
+        let count = raw.len() / step;
         let mean = if count > 0 { sum as f32 / count as f32 } else { 0.0 };
         
+        let mut diagnostic = None;
+        if mean < 15.0 {
+            diagnostic = Some("Too Dark (Check Lighting)".to_string());
+        } else if mean > 245.0 {
+            diagnostic = Some("Too Bright (Overexposed)".to_string());
+        }
+
         // Print stats occasionally
         if rand::random::<f32>() < 0.05 {
              println!("[AI] Input Stats: {}x{} mean_brightness={:.1} (0=black)", dyn_img.width(), dyn_img.height(), mean);
@@ -123,20 +129,24 @@ impl InferenceEngine {
                     match landmark_model.predict(&dyn_img, xc, yc, scale, theta) {
                         Ok((landmarks, score, _)) => {
                             let points: Vec<[f32; 3]> = landmarks.iter().map(|p| [p.0, p.1, p.2]).collect();
-                            if rand::random::<f32>() < 0.1 {
-                                println!("[AI] Face OK: {} landmarks, score={:.2}", points.len(), score);
+                            if rand::random::<f32>() < 0.01 {
+                                println!("[AI] Face OK: {} landmarks, score={:.4}", points.len(), score);
                             }
                             face_landmarks = Some(points);
                         },
                         Err(e) => {
-                            println!("[AI] Face landmark predict failed: {}", e);
+                            diagnostic = Some(format!("Face Landmark Error: {}", e));
                         }
                     }
                 }
             } else {
                 // No face detected in this frame
-                println!("[AI] No face detected (0 detections) | Img: {}x{}", dyn_img.width(), dyn_img.height());
+                if diagnostic.is_none() {
+                    diagnostic = Some("Face Not Detected".to_string());
+                }
             }
+        } else if diagnostic.is_none() {
+             diagnostic = Some("Model Not Loaded (Face)".to_string());
         }
 
         // --- HANDS ---
@@ -144,54 +154,53 @@ impl InferenceEngine {
         let mut right_hand = None;
 
         if let Some(palm_detector) = &mut self.palm_detector {
-            let palms = palm_detector.detect(&dyn_img)?;
-            
-            // Process up to 2 hands
-            // We need to associate landmarks to Left/Right
-            if let Some(hand_model) = &mut self.hand_landmark_model {
-                let (_, palm_config) = get_palm_detection_config();
+            let palms_result = palm_detector.detect(&dyn_img);
+            if let Ok(palms) = palms_result {
+                if let Some(hand_model) = &mut self.hand_landmark_model {
+                    let (_, palm_config) = get_palm_detection_config();
 
-                for (i, palm) in palms.iter().enumerate() {
-                    if i >= 2 { break; } // Limit to 2 hands
+                    for (i, palm) in palms.iter().enumerate() {
+                        if i >= 2 { break; } // Limit to 2 hands
 
-                    let (xc, yc, scale, theta) = detection2roi(&palm, &palm_config);
-                    
-                    if let Ok((landmarks, score, handedness)) = hand_model.predict(&dyn_img, xc, yc, scale, theta) {
-                        if score < 0.5 { continue; } // Threshold
-
-                        let points: Vec<[f32; 3]> = landmarks.iter().map(|p| [p.0, p.1, p.2]).collect();
+                        let (xc, yc, scale, theta) = detection2roi(&palm, &palm_config);
                         
-                        // Handedness logic
-                        // MediaPipe: 0.0 - 0.5 = Left? 0.5 - 1.0 = Right?
-                        // "handedness" output (index 2) usually:
-                        // < 0.5 => Left (Label: "Left")
-                        // > 0.5 => Right (Label: "Right")
-                        // Note: MediaPipe "Left" means "Left Hand" (User's left).
-                        // Mirror mode might affect this? Assuming simple standard for now.
-                        
-                        let is_right = if let Some(h) = handedness {
-                            h > 0.5
-                        } else {
-                            // If no handedness output, use position relative to image center
-                            // X < 0.5 (Image Left) -> Right Hand (Mirror)? Or Left Hand?
-                            // In selfie mode (mirror), Image Left is User Right.
-                            // Let's assume User Perspective (non-mirror) for simple logic first?
-                            // Or just assign first to Left, second to Right?
-                            // Better to rely on X coord if handedness missing.
-                            // If x < 0.5 -> Right Hand (User's Right is on Image Left in mirror).
-                            xc < 0.5
-                        };
+                        if let Ok((landmarks, score, handedness)) = hand_model.predict(&dyn_img, xc, yc, scale, theta) {
+                            if score < 0.5 { continue; } // Threshold
 
-                        if is_right {
-                            if right_hand.is_none() { right_hand = Some(points); }
-                        } else {
-                            if left_hand.is_none() { left_hand = Some(points); }
+                            let points: Vec<[f32; 3]> = landmarks.iter().map(|p| [p.0, p.1, p.2]).collect();
+                            
+                            // Handedness logic
+                            // MediaPipe: 0.0 - 0.5 = Left? 0.5 - 1.0 = Right?
+                            // "handedness" output (index 2) usually:
+                            // < 0.5 => Left (Label: "Left")
+                            // > 0.5 => Right (Label: "Right")
+                            // Note: MediaPipe "Left" means "Left Hand" (User's left).
+                            // Mirror mode might affect this? Assuming simple standard for now.
+                            
+                            let is_right = if let Some(h) = handedness {
+                                h > 0.5
+                            } else {
+                                // If no handedness output, use position relative to image center
+                                // X < 0.5 (Image Left) -> Right Hand (Mirror)? Or Left Hand?
+                                // In selfie mode (mirror), Image Left is User Right.
+                                // Let's assume User Perspective (non-mirror) for simple logic first?
+                                // Or just assign first to Left, second to Right?
+                                // Better to rely on X coord if handedness missing.
+                                // If x < 0.5 -> Right Hand (User's Right is on Image Left in mirror).
+                                xc < 0.5 // Standard mirror heuristic
+                            };
+
+                            if is_right {
+                                if right_hand.is_none() { right_hand = Some(points); }
+                            } else {
+                                if left_hand.is_none() { left_hand = Some(points); }
+                            }
                         }
                     }
                 }
             }
         }
 
-        Ok((face_landmarks, left_hand, right_hand))
+        Ok((face_landmarks, left_hand, right_hand, mean, diagnostic))
     }
 }

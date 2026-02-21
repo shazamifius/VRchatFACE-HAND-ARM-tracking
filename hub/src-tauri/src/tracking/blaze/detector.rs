@@ -26,11 +26,12 @@ impl BlazeDetector {
         let mut is_nchw = true;
         if let Some(input) = session.inputs().get(0) {
             let name = input.name();
-            if name.contains("_1") || name.to_lowercase().contains("nhwc") {
+            println!("[Rust] Detector input name: {}", name);
+            if name.contains("_1") || name.contains(".1") || name.to_lowercase().contains("nhwc") {
                 is_nchw = false;
-                println!("[Rust] Detector model '{}' detected as NHWC.", name);
+                println!("[Rust] Model '{}' detected as NHWC.", name);
             } else {
-                println!("[Rust] Detector model '{}' detected as NCHW.", name);
+                println!("[Rust] Model '{}' detected as NCHW.", name);
             }
         }
 

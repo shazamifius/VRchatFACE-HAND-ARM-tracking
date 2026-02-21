@@ -539,4 +539,27 @@ mod tests {
             .any(|(k, _)| k == "EyesX" || k == "HeadPitch" || k == "EyeBlinkLeft");
         assert!(has_any_face_param, "Fallback should contain face-related params");
     }
+
+    // ===== TEST 11: Face Diagnostics (New) =====
+    #[test]
+    fn test_face_diagnostics() {
+        use crate::tracking::ai::InferenceEngine;
+        use image::{ImageBuffer, Rgb};
+
+        let mut engine = InferenceEngine::new();
+        // We don't need to load real models for this logic test if we mock the detections,
+        // but since we want to test run_inference, we'll check the diagnostic output format.
+        
+        // 1. Test Dark Image
+        let dark_img = ImageBuffer::from_pixel(128, 128, Rgb([5, 5, 5]));
+        let (_, _, _, brightness, diagnostic) = engine.run_inference(&dark_img).unwrap();
+        assert!(brightness < 10.0);
+        assert!(diagnostic.unwrap().contains("Too Dark"));
+
+        // 2. Test Bright Image
+        let bright_img = ImageBuffer::from_pixel(128, 128, Rgb([250, 250, 250]));
+        let (_, _, _, brightness, diagnostic) = engine.run_inference(&bright_img).unwrap();
+        assert!(brightness > 240.0);
+        assert!(diagnostic.unwrap().contains("Too Bright"));
+    }
 }

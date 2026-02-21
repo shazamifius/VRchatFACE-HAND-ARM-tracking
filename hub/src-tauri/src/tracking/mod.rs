@@ -292,14 +292,10 @@ impl TrackingEngine {
                         let mut ai_guard = ai.lock().unwrap();
                         let inference_result = ai_guard.run_inference(&image_arc);
                         
-                        let (face, left, right) = match inference_result {
+                        let (face, left, right, brightness, diagnostic) = match inference_result {
                             Ok(res) => res,
                             Err(e) => {
-                                // [DEBUG] Log the specific AI error!
-                                if rand::random::<f32>() < 0.01 { // Throttle
-                                     println!("[Rust] AI Inference Error: {}", e);
-                                }
-                                (None, None, None)
+                                (None, None, None, 0.0, Some(format!("AI Error: {}", e)))
                             }
                         };
                         
@@ -324,6 +320,8 @@ impl TrackingEngine {
                             s.face_detected = has_face;
                             s.left_hand_detected = has_left;
                             s.right_hand_detected = has_right;
+                            s.mean_brightness = brightness;
+                            s.diagnostic_message = diagnostic;
                         }
 
                         // Emit to Frontend (Visualizer)

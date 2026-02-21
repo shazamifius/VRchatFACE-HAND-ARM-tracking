@@ -38,8 +38,7 @@ impl CameraManager {
         // 1. Define Backends to Query
         #[cfg(target_os = "windows")]
         let backends_to_try = vec![ApiBackend::MediaFoundation, ApiBackend::Auto];
-        #[cfg(not(target_os = "windows"))]
-        let backends_to_try = vec![ApiBackend::Auto];
+        // Note: DirectShow might be needed for some ASUS cams.
 
         for backend in backends_to_try {
             if let Ok(cams) = nokhwa::query(backend) {
@@ -318,11 +317,11 @@ impl CameraManager {
         println!("[Rust] Camera Backend Detect: {:?}", backend);
         
         let exposure_val = match backend {
-            nokhwa::utils::ApiBackend::MediaFoundation => ControlValueSetter::Integer(-6), 
+            nokhwa::utils::ApiBackend::MediaFoundation => ControlValueSetter::Integer(-8), 
             _ => {
                 // Heuristic: If we are on Windows and it's Auto, it's likely MF
                 if cfg!(target_os = "windows") {
-                    ControlValueSetter::Integer(-6)
+                    ControlValueSetter::Integer(-8)
                 } else {
                     ControlValueSetter::Integer(2500)
                 }
@@ -331,9 +330,9 @@ impl CameraManager {
 
         let exposure_desc = format!("{:?}", exposure_val);
         if let Err(e) = camera.set_camera_control(KnownCameraControl::Exposure, exposure_val) {
-            println!("[Rust] Note: Exposure manual tuning skipped: {}", e);
+             println!("[Rust] Note: Exposure manual tuning skipped/failed: {}", e);
         } else {
-            println!("[Rust] Exposure tuned for performance ({}).", exposure_desc);
+             println!("[Rust] Exposure tuned for performance ({}).", exposure_desc);
         }
         
         // Also try to set a reasonable exposure time if it's manual now?
