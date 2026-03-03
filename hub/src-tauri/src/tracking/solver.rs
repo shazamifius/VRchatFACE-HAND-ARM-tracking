@@ -237,82 +237,21 @@ impl Solver {
     }
 
     fn update_saccades(&mut self) -> (f32, f32) {
-        if self.saccade_timer.elapsed() > self.saccade_duration {
-            let is_large = self.prng_next() < 0.1; // 10% chance of large saccade
-            let range = if is_large { 0.2 } else { 0.02 };
-            let p = self.prng_range(-range, range);
-            let y = self.prng_range(-range, range);
-            self.saccade_target = (p, y);
-            let dur_ms = self.prng_range(200.0, 500.0) as u64;
-            self.saccade_duration = std::time::Duration::from_millis(dur_ms);
-            self.saccade_timer = std::time::Instant::now();
-        }
-        self.saccade_target
+        // Disabled "Alive Feel" Saccades during real tracking tracking
+        (0.0, 0.0)
     }
     
     /// Auto-blink: fires every 3-7s if no real blink detected, ~150ms duration
     pub fn update_auto_blink(&mut self, real_blink_detected: bool) -> f32 {
-        // If the user is really blinking, skip auto-blink
-        if real_blink_detected {
-            // Reset timer so auto-blink doesn't fire right after real blink
-            self.auto_blink_timer = std::time::Instant::now();
-            self.auto_blink_active = false;
-            return 0.0;
-        }
-        
-        // Check if an auto-blink is currently active
-        if self.auto_blink_active {
-            if std::time::Instant::now() < self.auto_blink_end {
-                return 1.0; // Eyes closed during auto-blink
-            }
-            // Blink finished
-            self.auto_blink_active = false;
-            self.auto_blink_timer = std::time::Instant::now();
-            // Schedule next blink (3-7s)
-            let next_ms = self.prng_range(3000.0, 7000.0) as u64;
-            self.auto_blink_next_interval = std::time::Duration::from_millis(next_ms);
-        }
-        
-        // Check if it's time to fire an auto-blink
-        if self.auto_blink_timer.elapsed() > self.auto_blink_next_interval {
-            self.auto_blink_active = true;
-            // Duration: 120-180ms
-            let dur_ms = self.prng_range(120.0, 180.0) as u64;
-            self.auto_blink_end = std::time::Instant::now() + std::time::Duration::from_millis(dur_ms);
-            return 1.0;
-        }
-        
+        // Disabled "Alive feel" forcing auto-blinks
         0.0
     }
 
     /// Micro-expressions: subtle ambient face movements to prevent frozen look
     /// Returns (brow_inner_up, cheek_raise, mouth_corner)
     pub fn update_micro_expressions(&mut self) -> (f32, f32, f32) {
-        // BrowInnerUp: 0-5%, every 4-8s
-        if self.micro_brow_timer.elapsed() > self.micro_brow_interval {
-            self.micro_brow_target = self.prng_range(0.0, 0.05);
-            let next = self.prng_range(4000.0, 8000.0) as u64;
-            self.micro_brow_interval = std::time::Duration::from_millis(next);
-            self.micro_brow_timer = std::time::Instant::now();
-        }
-        
-        // CheekRaise: 0-3%, every 6-12s
-        if self.micro_cheek_timer.elapsed() > self.micro_cheek_interval {
-            self.micro_cheek_target = self.prng_range(0.0, 0.03);
-            let next = self.prng_range(6000.0, 12000.0) as u64;
-            self.micro_cheek_interval = std::time::Duration::from_millis(next);
-            self.micro_cheek_timer = std::time::Instant::now();
-        }
-        
-        // MouthCorner: ±2%, every 5-10s
-        if self.micro_mouth_timer.elapsed() > self.micro_mouth_interval {
-            self.micro_mouth_target = self.prng_range(-0.02, 0.02);
-            let next = self.prng_range(5000.0, 10000.0) as u64;
-            self.micro_mouth_interval = std::time::Duration::from_millis(next);
-            self.micro_mouth_timer = std::time::Instant::now();
-        }
-        
-        (self.micro_brow_target, self.micro_cheek_target, self.micro_mouth_target)
+        // Disabled "Alive Feel" Micro-Expressions
+        (0.0, 0.0, 0.0)
     }
 
     /// Generate fallback params when face tracking is lost.
@@ -369,12 +308,12 @@ impl Solver {
         self.filter_params = (mc, beta);
     }
 
-    pub fn solve(&mut self, data: &TrackingData) -> SolverOutput {
+    pub fn solve(&mut self, data: &TrackingData, cam_w: f32, cam_h: f32) -> SolverOutput {
         let mut params = Vec::new();
         let mut trackers = Vec::new();
 
         // 1. Head
-        let (head_params, head_tracker) = self.solve_head(data);
+        let (head_params, head_tracker) = self.solve_head(data, cam_w, cam_h);
         params.extend(head_params);
         trackers.push(head_tracker);
         
@@ -392,8 +331,8 @@ impl Solver {
                          let w = Vector3::new(pts[0][0], pts[0][1], pts[0][2]);
                          let s = (Vector3::new(pts[9][0], pts[9][1], pts[9][2]) - w).norm();
                          let z = (600.0 * 0.09) / s.max(1.0);
-                         let x = ((w.x - 320.0) / 600.0) * z;
-                         let y = -((w.y - 240.0) / 600.0) * z;
+                         let x = ((w.x - (cam_w / 2.0)) / cam_w) * z;
+                         let y = -((w.y - (cam_h / 2.0)) / cam_w) * z;
                          Vector3::new(x, y, -z)
                      };
                      let dist = (get_wrist_m_raw(lh) - get_wrist_m_raw(rh)).norm() * 100.0;
@@ -418,7 +357,7 @@ impl Solver {
 
         // Left Hand
         if let Some(lh) = &data.left_hand_landmarks {
-            let (p, t) = self.solve_hand(lh, "LeftHand", true, head_pos, head_rot);
+            let (p, t) = self.solve_hand(lh, "LeftHand", true, head_pos, head_rot, cam_w, cam_h);
             self.last_left_hand_params = p.clone();
             self.left_hand_lost_at = None;
             params.extend(p);
@@ -429,7 +368,7 @@ impl Solver {
 
         // Right Hand
         if let Some(rh) = &data.right_hand_landmarks {
-            let (p, t) = self.solve_hand(rh, "RightHand", false, head_pos, head_rot);
+            let (p, t) = self.solve_hand(rh, "RightHand", false, head_pos, head_rot, cam_w, cam_h);
             self.last_right_hand_params = p.clone();
             self.right_hand_lost_at = None;
             params.extend(p);
@@ -441,7 +380,7 @@ impl Solver {
         SolverOutput { params, trackers }
     }
 
-    fn solve_head(&mut self, data: &TrackingData) -> (Vec<(String, f32)>, TrackerData) {
+    fn solve_head(&mut self, data: &TrackingData, cam_w: f32, cam_h: f32) -> (Vec<(String, f32)>, TrackerData) {
         let mut params = Vec::new();
         
         let mut q_raw = self.last_rotation.unwrap_or(UnitQuaternion::identity());
@@ -451,7 +390,7 @@ impl Solver {
             let get_pt_2d = |idx: usize| -> Vector2<f32> {
                 if idx < face.len() {
                     let p = face[idx];
-                    Vector2::new(p[0] * 640.0, p[1] * 480.0)
+                    Vector2::new(p[0], p[1])
                 } else { Vector2::zeros() }
             };
 
@@ -466,7 +405,7 @@ impl Solver {
                 &image_points, 
                 self.last_rotation, 
                 self.last_translation, 
-                600.0, Vector2::new(320.0, 240.0)
+                cam_w, Vector2::new(cam_w / 2.0, cam_h / 2.0)
             );
             q_raw = q;
             t_raw = t;
@@ -600,7 +539,7 @@ impl Solver {
         (params, cal_data)
     }
 
-    fn solve_hand(&mut self, landmarks: &Vec<[f32; 3]>, prefix: &str, is_left: bool, head_pos: Vector3<f32>, head_rot: UnitQuaternion<f32>) -> (Vec<(String, f32)>, Option<TrackerData>) {
+    fn solve_hand(&mut self, landmarks: &Vec<[f32; 3]>, prefix: &str, is_left: bool, head_pos: Vector3<f32>, head_rot: UnitQuaternion<f32>, cam_w: f32, cam_h: f32) -> (Vec<(String, f32)>, Option<TrackerData>) {
         if landmarks.len() < 21 { return (Vec::new(), None); }
         let mut params = Vec::new();
         
@@ -611,9 +550,9 @@ impl Solver {
         // 1. Raw Position (Meters)
         let wrist = get_pt(0);
         let hand_size_px = (get_pt(9) - wrist).norm();
-        let z_hand = (600.0 * 0.09) / hand_size_px.max(1.0);
-        let x = ((wrist.x - 320.0) / 600.0) * z_hand;
-        let y = -((wrist.y - 240.0) / 600.0) * z_hand;
+        let z_hand = (cam_w * 0.09) / hand_size_px.max(1.0);
+        let x = ((wrist.x - (cam_w / 2.0)) / cam_w) * z_hand;
+        let y = -((wrist.y - (cam_h / 2.0)) / cam_w) * z_hand;
         let pos_raw = Vector3::new(x, y, -z_hand);
 
         // 2. Dead Zone

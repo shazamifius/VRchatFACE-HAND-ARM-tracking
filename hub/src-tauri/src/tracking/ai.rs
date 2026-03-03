@@ -144,6 +144,9 @@ impl InferenceEngine {
                 if diagnostic.is_none() {
                     diagnostic = Some("Face Not Detected".to_string());
                 }
+                if rand::random::<f32>() < 0.05 {
+                    println!("[AI DEBUG] Face Detection empty vector returned from detector.detect()");
+                }
             }
         } else if diagnostic.is_none() {
              diagnostic = Some("Model Not Loaded (Face)".to_string());
@@ -177,8 +180,8 @@ impl InferenceEngine {
                             // Note: MediaPipe "Left" means "Left Hand" (User's left).
                             // Mirror mode might affect this? Assuming simple standard for now.
                             
-                            let is_right = if let Some(h) = handedness {
-                                h > 0.5
+                            let is_right = if let Some(h_val) = handedness {
+                                h_val > 0.5
                             } else {
                                 // If no handedness output, use position relative to image center
                                 // X < 0.5 (Image Left) -> Right Hand (Mirror)? Or Left Hand?
@@ -187,7 +190,7 @@ impl InferenceEngine {
                                 // Or just assign first to Left, second to Right?
                                 // Better to rely on X coord if handedness missing.
                                 // If x < 0.5 -> Right Hand (User's Right is on Image Left in mirror).
-                                xc < 0.5 // Standard mirror heuristic
+                                xc < 0.5 * dyn_img.width() as f32 // Standard mirror heuristic relative to image width
                             };
 
                             if is_right {

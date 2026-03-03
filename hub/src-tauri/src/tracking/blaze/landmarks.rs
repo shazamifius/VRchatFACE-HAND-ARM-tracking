@@ -149,18 +149,15 @@ impl BlazeLandmark {
         );
 
         // Combine with Z
-        // Z also needs scaling? Python: `landmark[:,:2] *= self.resolution`
         // Z is relative to scale.
-        // `landmark = (affine[:,:2] @ landmark[:,:2].T + affine[:,2:]).T`
         
         let mut final_landmarks = Vec::new();
+        // Calculate the scale factor for depth. Z coordinate is relative to the bounding box scale 
+        // across the original image, mapped from the model's pixel space.
+        let scale_factor = scale / self.input_size.0 as f32; 
+        
         for (i, (ox, oy)) in landmarks_orig_2d.iter().enumerate() {
-            // Z needs to be scaled by (scale / resolution) theoretically?
-            // "z coordinate is relative to the bounding box size"
-            
-            let scale_factor = scale / self.input_size.0 as f32; 
             let oz = z_coords[i] * scale_factor;
-            
             final_landmarks.push((*ox, *oy, oz));
         }
 

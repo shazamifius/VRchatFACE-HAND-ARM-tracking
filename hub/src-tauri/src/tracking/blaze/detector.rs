@@ -116,9 +116,16 @@ impl BlazeDetector {
             &self.anchors, 
             &self.config
         );
+        if rand::random::<f32>() < 0.05 {
+            println!("[AI DEBUG] Raw Outputs - Boxes Shape: {:?}, Scores Shape: {:?}", shape0, _shape1);
+            println!("[AI DEBUG] Decoded {} potential face detections before NMS", detections.len());
+        }
 
         // 5. NMS
         let filtered = weighted_non_max_suppression(&mut detections, self.config.min_suppression_threshold);
+        if rand::random::<f32>() < 0.05 {
+            println!("[AI DEBUG] NMS kept {} face detections", filtered.len());
+        }
 
         // 6. Denormalize to original image
         let mut final_detections = Vec::new();

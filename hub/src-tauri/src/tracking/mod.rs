@@ -412,7 +412,11 @@ impl TrackingEngine {
 
                 // 2. Solve (profiled)
                 let t_solve = std::time::Instant::now();
-                let output = solver.solve(&tracking_data);
+                let (cam_w, cam_h) = {
+                    let s = status_logic.lock().unwrap();
+                    (s.camera_width as f32, s.camera_height as f32)
+                };
+                let output = solver.solve(&tracking_data, cam_w, cam_h);
                 let solve_ms = t_solve.elapsed().as_secs_f32() * 1000.0;
 
                 // 3. Send to VRChat (profiled)

@@ -56,6 +56,8 @@ pub fn decode_boxes(
     // raw_boxes shape: [num_anchors, num_coords]
     // raw_scores shape: [num_anchors, num_classes] (often 1)
 
+    let mut max_seen_score = 0.0f32;
+
     for (i, anchor) in anchors.iter().enumerate() {
         let score_offset = i * config.num_classes;
         if score_offset >= raw_scores.len() { break; }
@@ -65,6 +67,10 @@ pub fn decode_boxes(
         // Sigmoid
         let score_val = 1.0 / (1.0 + (-score_raw.clamp(-100.0, 100.0)).exp()); 
         
+        if score_val > max_seen_score {
+             max_seen_score = score_val;
+        }
+
         if score_val < config.min_score_thresh {
             continue;
         }
@@ -99,6 +105,10 @@ pub fn decode_boxes(
             xmax,
             keypoints,
         });
+    }
+
+    if rand::random::<f32>() < 0.05 {
+         println!("[AI DEBUG] Max raw anchor score seen this frame: {:.4}", max_seen_score);
     }
 
     detections

@@ -15,6 +15,8 @@ pub struct ConnectivityManager {
     osc_target: String, // "127.0.0.1:9000"
     cloudflared_process: Arc<Mutex<Option<Child>>>,
     pub tunnel_url: Arc<Mutex<Option<String>>>,
+    last_sent_params: Mutex<std::collections::HashMap<String, f32>>,
+    next_heartbeat: Mutex<std::time::Instant>,
 }
 
 impl ConnectivityManager {
@@ -26,6 +28,8 @@ impl ConnectivityManager {
             osc_target: "127.0.0.1:9000".to_string(), // Default VRChat port
             cloudflared_process: Arc::new(Mutex::new(None)),
             tunnel_url: Arc::new(Mutex::new(None)),
+            last_sent_params: Mutex::new(std::collections::HashMap::new()),
+            next_heartbeat: Mutex::new(std::time::Instant::now()),
         })
     }
 
@@ -88,25 +92,37 @@ impl ConnectivityManager {
     }
 
     /// Send full tracking data to VRChat
-    /// Send full tracking data to VRChat — batched as a single OSC bundle
+    /// Send full tracking data to VRChat — batched as a single OSC bundle with intelligent delta thresholding
     pub fn send_tracking_data(&self, face_params: Vec<(String, f32)>) -> Result<()> {
         let mut msgs: Vec<OscMessage> = Vec::with_capacity(80);
+        let now = std::time::Instant::now();
+        
+        // 1. Send Heartbeat (Activator Params) every 5 seconds instead of every frame
+        let mut do_heartbeat = false;
+        {
+            let mut next_hb = self.next_heartbeat.lock().unwrap();
+            if now >= *next_hb {
+                do_heartbeat = true;
+                *next_hb = now + std::time::Duration::from_secs(5);
+            }
+        }
 
-        // Activator Params
-        msgs.push(Self::make_bool_msg("/avatar/parameters/FaceTrackingActive", true));
-        msgs.push(Self::make_bool_msg("/avatar/parameters/FaceTracking", true));
-        msgs.push(Self::make_bool_msg("/avatar/parameters/OSC", true));
-        msgs.push(Self::make_bool_msg("/avatar/parameters/PancakeMode", true));
-        msgs.push(Self::make_bool_msg("/avatar/parameters/LipTrackingActive", true));
-        msgs.push(Self::make_bool_msg("/avatar/parameters/EyeTrackingActive", true));
-        msgs.push(Self::make_bool_msg("/avatar/parameters/FTOn", true));
-        msgs.push(Self::make_bool_msg("/avatar/parameters/FTOff", false));
-        msgs.push(Self::make_bool_msg("/avatar/parameters/FacialExpressionsDisabled", false));
-        msgs.push(Self::make_float_msg("/avatar/parameters/FaceTrackingActive", 1.0));
-        msgs.push(Self::make_float_msg("/avatar/parameters/FaceTracking", 1.0));
-        msgs.push(Self::make_float_msg("/avatar/parameters/OSC", 1.0));
-        msgs.push(Self::make_float_msg("/avatar/parameters/LipTracking_GestureControl", 0.0));
-        msgs.push(Self::make_float_msg("/avatar/parameters/EyeTracking_GestureControl", 0.0));
+        if do_heartbeat {
+            msgs.push(Self::make_bool_msg("/avatar/parameters/FaceTrackingActive", true));
+            msgs.push(Self::make_bool_msg("/avatar/parameters/FaceTracking", true));
+            msgs.push(Self::make_bool_msg("/avatar/parameters/OSC", true));
+            msgs.push(Self::make_bool_msg("/avatar/parameters/PancakeMode", true));
+            msgs.push(Self::make_bool_msg("/avatar/parameters/LipTrackingActive", true));
+            msgs.push(Self::make_bool_msg("/avatar/parameters/EyeTrackingActive", true));
+            msgs.push(Self::make_bool_msg("/avatar/parameters/FTOn", true));
+            msgs.push(Self::make_bool_msg("/avatar/parameters/FTOff", false));
+            msgs.push(Self::make_bool_msg("/avatar/parameters/FacialExpressionsDisabled", false));
+            msgs.push(Self::make_float_msg("/avatar/parameters/FaceTrackingActive", 1.0));
+            msgs.push(Self::make_float_msg("/avatar/parameters/FaceTracking", 1.0));
+            msgs.push(Self::make_float_msg("/avatar/parameters/OSC", 1.0));
+            msgs.push(Self::make_float_msg("/avatar/parameters/LipTracking_GestureControl", 0.0));
+            msgs.push(Self::make_float_msg("/avatar/parameters/EyeTracking_GestureControl", 0.0));
+        }
 
         let mut head_pos = Vector3::new(0.0, 0.0, 0.0);
         let mut head_rot = Vector3::new(0.0, 0.0, 0.0);
@@ -126,9 +142,19 @@ impl ConnectivityManager {
             }
         }
 
-        // Helper: push avatar param message
-        let avatar_msg = |name: &str, val: f32| -> OscMessage {
-            Self::make_float_msg(&format!("/avatar/parameters/{}", name), val)
+        let mut param_cache = self.last_sent_params.lock().unwrap();
+
+        let mut push_smart = |msgs: &mut Vec<OscMessage>, cache: &mut std::collections::HashMap<String, f32>, name: &str, val: f32, epsilon: f32| {
+            let osc_addr = format!("/avatar/parameters/{}", name);
+            let send = match cache.get(&osc_addr) {
+                Some(last_val) => (val - last_val).abs() > epsilon || (val == 0.0 && last_val.abs() > 0.001),
+                None => true,
+            };
+            if send {
+                println!("[OSC] Sent {} = {:.3}", osc_addr, val);
+                msgs.push(Self::make_float_msg(&osc_addr, val));
+                cache.insert(osc_addr, val);
+            }
         };
 
         for (param, value) in face_params {
@@ -141,9 +167,9 @@ impl ConnectivityManager {
             if param == "HeadPos_X" { head_pos.x = value; has_head_pos = true; continue; }
             if param == "HeadPos_Y" { head_pos.y = value; has_head_pos = true; continue; }
             if param == "HeadPos_Z" { head_pos.z = value; has_head_pos = true; continue; }
-            if param == "HeadYaw" { head_rot.y = value; has_head = true; }
-            if param == "HeadPitch" { head_rot.x = value; has_head = true; }
-            if param == "HeadRoll" { head_rot.z = value; has_head = true; }
+            if param == "HeadYaw" { head_rot.y = value; has_head = true; continue; }
+            if param == "HeadPitch" { head_rot.x = value; has_head = true; continue; }
+            if param == "HeadRoll" { head_rot.z = value; has_head = true; continue; }
             if param == "HeadYawCoupling" { head_rot.y += value; has_head = true; continue; }
             if param == "HeadPitchCoupling" { head_rot.x += value; has_head = true; continue; }
 
@@ -160,77 +186,99 @@ impl ConnectivityManager {
                 let digit = param.replace("HandLeft", "").replace("HandRight", "");
                 let side = if param.contains("Left") { "Left" } else { "Right" };
                 if digit.starts_with("Pos") || digit.starts_with("Rot") { continue; }
-                msgs.push(avatar_msg(&format!("Gesture{}{}", side, digit), value));
+                push_smart(&mut msgs, &mut param_cache, &format!("Gesture{}{}", side, digit), value, 0.015);
                 continue;
             }
 
             // Standard Face Param
-            msgs.push(Self::make_float_msg(&format!("/avatar/parameters/{}", param), value));
+            push_smart(&mut msgs, &mut param_cache, &param, value, 0.01);
 
             // Aliases & Unified Expressions
             if param == "JawOpen" {
-                msgs.push(avatar_msg("MouthOpen", value));
-                msgs.push(avatar_msg("Voice", value));
-                msgs.push(avatar_msg("vrc_MouthOpen", value));
-                msgs.push(avatar_msg("Aperture", value));
-                msgs.push(avatar_msg("jawOpen", value));
-                msgs.push(avatar_msg("mouthOpen", value));
-                msgs.push(avatar_msg("VRCFaceBlendShape_JawOpen", value));
-                msgs.push(avatar_msg("FT/v2/JawOpen", value));
+                push_smart(&mut msgs, &mut param_cache, "MouthOpen", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "Voice", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "vrc_MouthOpen", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "Aperture", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "jawOpen", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "mouthOpen", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "VRCFaceBlendShape_JawOpen", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "FT/v2/JawOpen", value, 0.01);
             }
             if param == "CheekPuff" {
-                msgs.push(avatar_msg("CheekPuff", value));
-                msgs.push(avatar_msg("OSCm/BlendSetRight", value));
-                msgs.push(avatar_msg("OSCm/BlendSetLeft", value));
-                msgs.push(avatar_msg("FT/v2/CheekPuff", value));
+                push_smart(&mut msgs, &mut param_cache, "CheekPuff", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "OSCm/BlendSetRight", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "OSCm/BlendSetLeft", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "FT/v2/CheekPuff", value, 0.01);
             }
             if param == "EyeBlinkLeft" {
-                msgs.push(avatar_msg("BlinkLeft", value));
-                msgs.push(avatar_msg("EyeOpenLeft", 1.0 - value));
-                msgs.push(avatar_msg("EyesClosed", value));
-                msgs.push(avatar_msg("eyeClosedLeft", value));
-                msgs.push(avatar_msg("blinkLeft", value));
-                msgs.push(avatar_msg("EyeClosedLeft", value));
-                msgs.push(avatar_msg("VRCFaceBlendShape_EyeBlinkLeft", value));
-                msgs.push(avatar_msg("FT/v2/EyeLidLeft", (1.0 - value) * brow_max_open));
+                push_smart(&mut msgs, &mut param_cache, "BlinkLeft", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "EyeOpenLeft", 1.0 - value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "EyesClosed", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "eyeClosedLeft", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "blinkLeft", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "EyeClosedLeft", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "VRCFaceBlendShape_EyeBlinkLeft", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "FT/v2/EyeLidLeft", (1.0 - value) * brow_max_open, 0.01);
             }
             if param == "EyeBlinkRight" {
-                msgs.push(avatar_msg("BlinkRight", value));
-                msgs.push(avatar_msg("EyeOpenRight", 1.0 - value));
-                msgs.push(avatar_msg("eyeClosedRight", value));
-                msgs.push(avatar_msg("blinkRight", value));
-                msgs.push(avatar_msg("EyeClosedRight", value));
-                msgs.push(avatar_msg("VRCFaceBlendShape_EyeBlinkRight", value));
-                msgs.push(avatar_msg("FT/v2/EyeLidRight", (1.0 - value) * brow_max_open));
+                push_smart(&mut msgs, &mut param_cache, "BlinkRight", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "EyeOpenRight", 1.0 - value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "eyeClosedRight", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "blinkRight", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "EyeClosedRight", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "VRCFaceBlendShape_EyeBlinkRight", value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, "FT/v2/EyeLidRight", (1.0 - value) * brow_max_open, 0.01);
             }
             if param.starts_with("EyeLook") {
-                msgs.push(avatar_msg(&format!("VRCFaceBlendShape_{}", param), value));
-                msgs.push(avatar_msg(&format!("FT/v2/{}", param), value));
+                push_smart(&mut msgs, &mut param_cache, &format!("VRCFaceBlendShape_{}", param), value, 0.01);
+                push_smart(&mut msgs, &mut param_cache, &format!("FT/v2/{}", param), value, 0.01);
                 let lower = param[0..1].to_lowercase() + &param[1..];
-                msgs.push(avatar_msg(&lower, value));
+                push_smart(&mut msgs, &mut param_cache, &lower, value, 0.01);
             }
         }
+
+        let mut track_v3 = |msgs: &mut Vec<OscMessage>, cache: &mut std::collections::HashMap<String, f32>, addr: &str, x: f32, y: f32, z: f32, eps: f32| {
+            let send = match cache.get(addr) {
+                Some(lx) => (x - lx).abs() > eps || (y - *cache.get(&format!("{}y", addr)).unwrap_or(&0.0)).abs() > eps || (z - *cache.get(&format!("{}z", addr)).unwrap_or(&0.0)).abs() > eps,
+                None => true,
+            };
+            if send {
+                println!("[OSC] Track {} = [{:.3}, {:.3}, {:.3}]", addr, x, y, z);
+                msgs.push(Self::make_vec3_msg(addr, x, y, z));
+                cache.insert(addr.to_string(), x);
+                cache.insert(format!("{}y", addr), y);
+                cache.insert(format!("{}z", addr), z);
+            }
+        };
 
         // Head Tracker messages
         if has_head {
             let pitch_deg = head_rot.x * 57.2958;
             let yaw_deg = head_rot.y * 57.2958;
             let roll_deg = head_rot.z * 57.2958;
-            msgs.push(Self::make_vec3_msg("/tracking/trackers/head/rotation", pitch_deg, yaw_deg, roll_deg));
+            
+            track_v3(&mut msgs, &mut param_cache, "/tracking/trackers/head/rotation", pitch_deg, yaw_deg, roll_deg, 0.5); // 0.5 degree epsilon
+            
             if has_head_pos {
-                msgs.push(Self::make_vec3_msg("/tracking/trackers/head/position", head_pos.x, head_pos.y, head_pos.z));
+                track_v3(&mut msgs, &mut param_cache, "/tracking/trackers/head/position", head_pos.x, head_pos.y, head_pos.z, 0.005); // 5mm epsilon
             }
-            msgs.push(Self::make_float_msg("/input/HeadPitch", head_rot.x));
-            msgs.push(Self::make_float_msg("/input/HeadYaw", head_rot.y));
-            msgs.push(Self::make_float_msg("/input/HeadRoll", head_rot.z));
+            
+            push_smart(&mut msgs, &mut param_cache, "HeadPitch", head_rot.x, 0.01);
+            push_smart(&mut msgs, &mut param_cache, "HeadYaw", head_rot.y, 0.01);
+            push_smart(&mut msgs, &mut param_cache, "HeadRoll", head_rot.z, 0.01);
         }
 
         // Hand Tracker messages
         if has_left_hand {
-            msgs.push(Self::make_vec3_msg("/tracking/trackers/1/position", left_hand_pos.x, left_hand_pos.y, left_hand_pos.z));
+            track_v3(&mut msgs, &mut param_cache, "/tracking/trackers/1/position", left_hand_pos.x, left_hand_pos.y, left_hand_pos.z, 0.005);
         }
         if has_right_hand {
-            msgs.push(Self::make_vec3_msg("/tracking/trackers/2/position", right_hand_pos.x, right_hand_pos.y, right_hand_pos.z));
+            track_v3(&mut msgs, &mut param_cache, "/tracking/trackers/2/position", right_hand_pos.x, right_hand_pos.y, right_hand_pos.z, 0.005);
+        }
+        
+        // Print how many messages we saved
+        if msgs.len() > 0 && msgs.len() < 50 {
+             // println!("[OSC] Emitted {} messages", msgs.len());
         }
 
         // Send everything as a single bundle

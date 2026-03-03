@@ -297,7 +297,7 @@ mod tests {
             head_rotation: None,
         };
         
-        let output = solver.solve(&data);
+        let output = solver.solve(&data, 640.0, 480.0);
         
         // Check that we got head params
         let head_pitch = output.params.iter().find(|(k, _)| k == "HeadPitch");
@@ -442,7 +442,7 @@ mod tests {
             head_rotation: None,
         };
         
-        let output = solver.solve(&data);
+        let output = solver.solve(&data, 640.0, 480.0);
         
         // Verify EyeLook blendshapes are present
         let eye_look_params: Vec<&str> = vec![
@@ -519,7 +519,7 @@ mod tests {
             head_rotation: None,
         };
         
-        let output_with = solver.solve(&data_with_face);
+        let output_with = solver.solve(&data_with_face, 640.0, 480.0);
         assert!(!output_with.params.is_empty(), "Should have params when face is present");
         
         // Now solve with NO face data — should produce fallback
@@ -530,7 +530,7 @@ mod tests {
             head_rotation: None,
         };
         
-        let output_fallback = solver.solve(&data_no_face);
+        let output_fallback = solver.solve(&data_no_face, 640.0, 480.0);
         assert!(!output_fallback.params.is_empty(), "Fallback should produce params even without face");
         
         // Fallback params should exist (decayed from last known)

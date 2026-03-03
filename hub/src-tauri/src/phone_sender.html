@@ -485,7 +485,9 @@
                                 log(`Warning: Blob too small (${blob.size} bytes). Retrying...`);
                             } else {
                                 try {
-                                    const response = await fetch('/push', {
+                                    // [FIX] Use relative protocol-agnostic path for Cloudflare HTTPS compatibility
+                                    const pushUrl = window.location.origin + '/push';
+                                    const response = await fetch(pushUrl, {
                                         method: 'POST',
                                         body: blob
                                     });
