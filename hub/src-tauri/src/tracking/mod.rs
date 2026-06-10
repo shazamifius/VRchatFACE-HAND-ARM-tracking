@@ -328,16 +328,34 @@ impl TrackingEngine {
                              let _ = tx.try_send(image_arc.clone());
                          }
 
-                        // 2. Inference
-                        let mut ai_guard = ai.lock().unwrap();
-                        let inference_result = ai_guard.run_inference(&image_arc);
-                        
+                        // 2. Inference — isolated per frame. A panic inside one
+                        // frame's inference (e.g. a degenerate crop) used to unwind
+                        // and KILL this whole tracking thread silently: no more
+                        // landmarks were produced while the OSC thread kept
+                        // re-emitting the last value forever, so the app "froze".
+                        // catch_unwind contains the panic, logs where it happened,
+                        // drops that frame, and lets tracking keep running. The lock
+                        // is taken poison-tolerantly so a prior panic can't cascade.
+                        let inference_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let mut ai_guard = ai.lock().unwrap_or_else(|e| e.into_inner());
+                            ai_guard.run_inference(&image_arc)
+                        }));
+
                         let (face, left, right, brightness, diagnostic) = match inference_result {
-                            Ok(res) => res,
-                            Err(e) => {
+                            Ok(Ok(res)) => res,
+                            Ok(Err(e)) => {
                                 // [DIAG] Surface the real inference error to the console.
                                 println!("[AI ERROR] run_inference failed: {:#}", e);
                                 (None, None, None, 0.0, Some(format!("AI Error: {}", e)))
+                            }
+                            Err(panic) => {
+                                let msg = panic
+                                    .downcast_ref::<&str>()
+                                    .map(|s| s.to_string())
+                                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                                    .unwrap_or_else(|| "unknown panic".to_string());
+                                println!("[AI PANIC] inference panicked (frame skipped): {}", msg);
+                                (None, None, None, 0.0, Some("AI Panic (recovered)".to_string()))
                             }
                         };
                         
