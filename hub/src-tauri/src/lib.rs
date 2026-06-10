@@ -237,8 +237,28 @@ pub fn run() {
                 }
             });
 
+            // [VMT TEST] Run the app with the env var VMT_TEST=1 to drive a
+            // phantom tracker (VMT index 1) in a slow circle, so you can verify
+            // the Rust -> VMT -> SteamVR transport in the SteamVR room view
+            // BEFORE any body-pose AI is wired in. If the device shows up moving
+            // in SteamVR, Phase 1's plumbing is proven. Harmless when unset.
+            if std::env::var("VMT_TEST").as_deref() == Ok("1") {
+                std::thread::spawn(|| match crate::tracking::vmt::VmtBridge::new() {
+                    Ok(vmt) => {
+                        println!("[VMT TEST] driving phantom tracker index 1 in a circle -> watch SteamVR (VMT driver must be installed)");
+                        let start = std::time::Instant::now();
+                        loop {
+                            let t = start.elapsed().as_secs_f32();
+                            if let Err(e) = vmt.send_test_circle(1, t, 0.3) {
+                                println!("[VMT TEST] send failed: {}", e);
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(16)); // ~60 Hz
+                        }
+                    }
+                    Err(e) => println!("[VMT TEST] could not open socket: {}", e),
+                });
+            }
 
-            
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
