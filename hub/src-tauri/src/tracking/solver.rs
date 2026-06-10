@@ -413,8 +413,18 @@ impl Solver {
                 cam_w, Vector2::new(cam_w / 2.0, cam_h / 2.0)
             );
             q_raw = q;
-            t_raw = t;
-            
+            // Clamp the PnP translation to a physically plausible box (cm). Noisy
+            // landmarks (esp. in low light) can make Gauss-Newton diverge to huge
+            // values (e.g. head "position" of -191 m), and because we feed the
+            // result back as the next initial guess, one bad solve poisons all
+            // following frames. Clamping keeps the head near the camera and stops
+            // the feedback blow-up.
+            t_raw = Vector3::new(
+                t.x.clamp(-40.0, 40.0),
+                t.y.clamp(-40.0, 40.0),
+                t.z.clamp(20.0, 150.0),
+            );
+
             self.last_rotation = Some(q_raw);
             self.last_translation = Some(t_raw);
         }

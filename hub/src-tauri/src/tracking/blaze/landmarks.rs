@@ -18,19 +18,27 @@ impl BlazeLandmark {
             .with_intra_threads(4)?
             .commit_from_file(model_path)?;
 
-        // Determine layout from the model's ACTUAL input shape, not the node name
-        // (see detector.rs for the full rationale). Channel axis is the size-3 one:
+        // Determine layout AND input size from the model's ACTUAL input shape, not
+        // the node name and not the caller's guess. Channel axis is the size-3 one:
         //   [N, 3, H, W] => NCHW   |   [N, H, W, 3] => NHWC
+        // Auto-detecting the size lets us swap models of different resolutions
+        // (e.g. the 192x192 468-pt FaceMesh) without touching the call sites.
         let mut is_nchw = true;
+        let mut in_w = input_size;
+        let mut in_h = input_size;
         if let Some(input) = session.inputs().get(0) {
             let name = input.name().to_string();
             if let ort::value::ValueType::Tensor { shape, .. } = input.dtype() {
                 if shape.len() == 4 && shape[1] == 3 {
                     is_nchw = true;
+                    if shape[2] > 0 { in_h = shape[2] as usize; }
+                    if shape[3] > 0 { in_w = shape[3] as usize; }
                 } else if shape.len() == 4 && shape[3] == 3 {
                     is_nchw = false;
+                    if shape[1] > 0 { in_h = shape[1] as usize; }
+                    if shape[2] > 0 { in_w = shape[2] as usize; }
                 }
-                println!("[Rust] Landmark '{}' input shape {:?} -> {}", name, &shape[..], if is_nchw { "NCHW" } else { "NHWC" });
+                println!("[Rust] Landmark '{}' input shape {:?} -> {} {}x{}", name, &shape[..], if is_nchw { "NCHW" } else { "NHWC" }, in_w, in_h);
             } else {
                 println!("[Rust] Landmark '{}' input is not a tensor; assuming NCHW", name);
             }
@@ -38,7 +46,7 @@ impl BlazeLandmark {
 
         Ok(Self {
             session,
-            input_size: (input_size, input_size),
+            input_size: (in_w, in_h),
             num_dims,
             is_nchw,
         })
