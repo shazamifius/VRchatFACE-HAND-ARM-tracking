@@ -175,17 +175,16 @@ impl InferenceEngine {
         if let Some((xc, yc, scale, theta)) = self.face_roi {
             if let Some(landmark_model) = &mut self.landmark_model {
                 match landmark_model.predict(&dyn_img, xc, yc, scale, theta) {
-                    Ok((landmarks, score, _)) => {
-                        if score < 0.3 {
-                            // Confidence collapsed -> drop ROI so we re-detect next frame.
-                            self.face_roi = None;
-                            if diagnostic.is_none() { diagnostic = Some("Face Not Detected".to_string()); }
-                        } else {
-                            let points: Vec<[f32; 3]> = landmarks.iter().map(|p| [p.0, p.1, p.2]).collect();
-                            // Track: derive next-frame ROI from these landmarks.
-                            self.face_roi = Some(Self::face_roi_from_landmarks(&landmarks, (xc, yc, scale, theta)));
-                            face_landmarks = Some(points);
-                        }
+                    Ok((landmarks, _score, _)) => {
+                        // NOTE: this face_landmark model's flag output reads ~0.27 even
+                        // for a clearly-tracked face, so we must NOT threshold on it.
+                        // (An earlier `score < 0.3` gate silently dropped EVERY face,
+                        // leaving the avatar neutral while the detector saw 0.99 faces.)
+                        // Lost-tracking is handled by the periodic re-detect, which
+                        // clears face_roi when the detector returns no faces.
+                        let points: Vec<[f32; 3]> = landmarks.iter().map(|p| [p.0, p.1, p.2]).collect();
+                        self.face_roi = Some(Self::face_roi_from_landmarks(&landmarks, (xc, yc, scale, theta)));
+                        face_landmarks = Some(points);
                     }
                     Err(e) => {
                         diagnostic = Some(format!("Face Landmark Error: {}", e));
