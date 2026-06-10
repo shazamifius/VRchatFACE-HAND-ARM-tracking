@@ -11,6 +11,7 @@ pub mod web_interface;
 pub mod types;
 pub mod blaze;
 pub mod bridge;
+pub mod vmt;
 pub mod solver;
 pub mod filter;
 pub mod terminal_monitor;
