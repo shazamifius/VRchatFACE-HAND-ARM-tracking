@@ -305,9 +305,16 @@ impl TrackingEngine {
                          // stamped from it (below), so the solver stays consistent.
                          let image = {
                              let w = image.width();
-                             if w > 640 {
-                                 let target_h = (image.height() * 640 / w).max(1);
-                                 image::imageops::resize(&image, 640, target_h, image::imageops::FilterType::Triangle)
+                             // Cap at 960px (was 640): the ONNX models run at fixed
+                             // 128/192/224 and extract_roi samples a fixed grid, so the
+                             // per-frame cost barely changes, but a larger frame gives
+                             // the face-mesh crop far more detail — needed to actually
+                             // capture mouth/eye motion (640 was too coarse: jaw/blink
+                             // landmarks barely moved).
+                             const INFER_W: u32 = 640;
+                             if w > INFER_W {
+                                 let target_h = (image.height() * INFER_W / w).max(1);
+                                 image::imageops::resize(&image, INFER_W, target_h, image::imageops::FilterType::Triangle)
                              } else {
                                  image
                              }
