@@ -65,6 +65,13 @@ impl BlazeLandmark {
         // 1. Extract ROI
         let roi_img = extract_roi(image, xc, yc, theta, scale, (self.input_size.0 as u32, self.input_size.1 as u32));
 
+        // 1b. Per-region adaptive lighting normalization. Because this crop is a
+        // tight box around one body part, CLAHE here acts independently per
+        // region (face / each hand) and makes the model robust to bad/uneven
+        // room lighting WITHOUT touching the camera source — the user's key
+        // insight. Cheap on a ~128–192px crop (sub-ms). See enhance::clahe.
+        let roi_img = crate::tracking::blaze::enhance::clahe(&roi_img, 8, 2.5);
+
         // 2. Preprocess
         // Normalize 0..1 or -1..1?
         // BlazeLandmark usually expects 0..1
