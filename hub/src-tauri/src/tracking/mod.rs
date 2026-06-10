@@ -84,7 +84,7 @@ impl TrackingEngine {
         let data = self.data.clone(); 
         let commands = self.commands.clone();
 
-        let mut running_guard = running.lock().unwrap();
+        let mut running_guard = running.lock().unwrap_or_else(|e| e.into_inner());
         if *running_guard {
             return Ok(());
         }
@@ -221,9 +221,17 @@ impl TrackingEngine {
              }
               if let Ok(mut cam) = camera.lock() {
                  if !use_remote_cam {
-                     if let Err(e) = cam.start(config_clone) { 
-                         crate::logging::log(&format!("[Rust] Failed to start camera: {}", e)); 
-                         return; 
+                     if let Err(e) = cam.start(config_clone) {
+                         crate::logging::log(&format!("[Rust] Failed to start camera: {}", e));
+                         // Don't leave a zombie "running" session with no camera —
+                         // clear the flag so Stop / Start / camera-switch can recover.
+                         if let Ok(mut r) = running.lock() { *r = false; }
+                         if let Ok(mut s) = status_capture.lock() {
+                             s.running = false;
+                             s.diagnostic_message = Some(format!("Camera failed to start: {}", e));
+                         }
+                         println!("[Rust] Camera start failed -> session cleared. {}", e);
+                         return;
                      }
                       if let Ok(mut s) = status_capture.lock() {
                           if true {
@@ -242,7 +250,7 @@ impl TrackingEngine {
             let mut frame_count = 0;
             let mut last_fps_update = std::time::Instant::now();
 
-            while *running.lock().unwrap() {
+            while *running.lock().unwrap_or_else(|e| e.into_inner()) {
                 // 1. Capture Frame
                 let frame_result = if use_remote_cam {
                     // Maximum Remote FPS control?
@@ -288,8 +296,24 @@ impl TrackingEngine {
 
                 match frame_result {
                     Ok(image) => {
+                         // Downscale large frames BEFORE inference. The camera often
+                         // streams 1080p (cheap to capture) but running 4 ONNX models
+                         // on 1080p collapses the pipeline to <1 fps. Cap width at 640:
+                         // the models downsample to 128/224 internally anyway, so
+                         // accuracy is unaffected while per-frame CPU cost drops ~9x.
+                         // Landmarks then live in this resolution, and frame_w/h is
+                         // stamped from it (below), so the solver stays consistent.
+                         let image = {
+                             let w = image.width();
+                             if w > 640 {
+                                 let target_h = (image.height() * 640 / w).max(1);
+                                 image::imageops::resize(&image, 640, target_h, image::imageops::FilterType::Triangle)
+                             } else {
+                                 image
+                             }
+                         };
                          let image_arc = Arc::new(image);
-                    
+
                          // Non-blocking send to encoder (Try Send)
                          // For remote cameras, the HTTP endpoint already broadcasts the raw JPEG, so we skip re-encoding
                          // to absolutely prevent interleaving frame rollbacks on the UI stream.
@@ -356,6 +380,15 @@ impl TrackingEngine {
                                 s.frame_time_ms = 1000.0 / fps;
                                 s.running = true;
                             }
+                            // Concise 1 Hz health summary (replaces the per-frame spam).
+                            println!(
+                                "[Status] {:>4.1} fps | face:{} Lhand:{} Rhand:{} | brightness:{:.0}",
+                                fps,
+                                if has_face { "ON " } else { "off" },
+                                if has_left { "ON " } else { "off" },
+                                if has_right { "ON " } else { "off" },
+                                brightness
+                            );
                             frame_count = 0;
                             last_fps_update = std::time::Instant::now();
                         }
@@ -387,7 +420,7 @@ impl TrackingEngine {
             println!("[Rust] Logic thread started");
             
             let mut _last_log = std::time::Instant::now();
-            while *running_logic.lock().unwrap() {
+            while *running_logic.lock().unwrap_or_else(|e| e.into_inner()) {
                 let start = std::time::Instant::now();
                 
                 
@@ -513,7 +546,14 @@ impl TrackingEngine {
 
 
     pub fn stop(&self) {
-        *self.running.lock().unwrap() = false;
+        // Poison-tolerant: if a worker thread panicked while holding this lock,
+        // Stop must STILL succeed, otherwise the app gets stuck "running" forever
+        // (this was a real symptom: after a bad camera switch, Stop did nothing).
+        match self.running.lock() {
+            Ok(mut r) => *r = false,
+            Err(poisoned) => *poisoned.into_inner() = false,
+        }
         self.web_interface.blocking_lock().stop(); // [FIX] Blocking lock
+        println!("[Rust] Stop requested (running = false).");
     }
 }

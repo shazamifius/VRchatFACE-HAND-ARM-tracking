@@ -167,32 +167,11 @@ async function refreshCameras() {
 function updateCameraList(cams) {
   elements.cameraSelect.innerHTML = '';
 
-  // Manual Fallbacks for safety
-  const manualOptions = [
-    { index: 0, name: "FORCE Camera Index 0 (Manual)" },
-    { index: 1, name: "FORCE Camera Index 1 (Manual)" },
-  ];
+  const hasDetected = cams && cams.length > 0;
 
-  manualOptions.forEach(opt => {
-    const option = document.createElement('option');
-    option.value = opt.index;
-    option.text = opt.name;
-    elements.cameraSelect.add(option);
-  });
-
-  // Divider
-  const divider = document.createElement('option');
-  divider.text = "--- Detected Devices ---";
-  divider.disabled = true;
-  elements.cameraSelect.add(divider);
-
-  // Detected
-  if (!cams || cams.length === 0) {
-    const option = document.createElement('option');
-    option.text = "No devices detected (Use Manual)";
-    option.disabled = true;
-    elements.cameraSelect.add(option);
-  } else {
+  if (hasDetected) {
+    // Real detected devices FIRST — these have clear names. refreshCameras()
+    // auto-selects the first working one, so the user never has to touch this.
     cams.forEach(cam => {
       const option = document.createElement('option');
       option.value = cam.index;
@@ -202,19 +181,27 @@ function updateCameraList(cams) {
       const resText = cam.width > 0 ? `${cam.width}x${cam.height}` : '';
 
       option.text = `${statusIcon} ${cam.name} (${resText} ${fpsText})`;
+      option.classList.add(cam.success ? 'camera-pass' : 'camera-fail');
+      elements.cameraSelect.add(option);
+    });
+  } else {
+    // Only fall back to confusing "FORCE index N" options when nothing was
+    // detected — otherwise they just clutter the list and let the user pick a
+    // non-existent device (which used to break everything).
+    const divider = document.createElement('option');
+    divider.text = "--- No camera detected — manual fallback ---";
+    divider.disabled = true;
+    elements.cameraSelect.add(divider);
 
-      // Apply CSS classes if we want styling (note: styling <option> tags is limited, but class works for some browsers)
-      if (cam.success) {
-        option.classList.add('camera-pass');
-      } else {
-        option.classList.add('camera-fail');
-      }
-
+    [0, 1].forEach(i => {
+      const option = document.createElement('option');
+      option.value = i;
+      option.text = `FORCE Camera Index ${i} (Manual)`;
       elements.cameraSelect.add(option);
     });
   }
 
-  // Phone
+  // Phone (always available)
   const phoneDivider = document.createElement('option');
   phoneDivider.text = "--- Remote ---";
   phoneDivider.disabled = true;
@@ -223,7 +210,6 @@ function updateCameraList(cams) {
   const phoneOption = document.createElement('option');
   phoneOption.value = 999;
   phoneOption.text = "📱 Phone Camera (Remote)";
-  // Always make phone green to show it's available
   phoneOption.classList.add('camera-pass');
   elements.cameraSelect.add(phoneOption);
 }

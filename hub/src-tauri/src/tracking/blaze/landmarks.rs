@@ -108,9 +108,9 @@ impl BlazeLandmark {
         let (_shape_score, score_slice) = outputs[1].try_extract_tensor::<f32>()?; // flag
         let score_val = score_slice[0];
 
-        if true {
-             println!("[AI] Landmark Output Shape: {:?} | Slice Len: {}", shape_lm, landmarks_slice.len());
-        }
+        // (Per-call landmark shape logging removed; see the 1 Hz status summary
+        // in the tracking loop for health info.)
+        let _ = &shape_lm;
 
         let mut handedness_val = None;
         if outputs.len() >= 3 {

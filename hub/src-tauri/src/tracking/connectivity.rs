@@ -151,7 +151,6 @@ impl ConnectivityManager {
                 None => true,
             };
             if send {
-                println!("[OSC] Sent {} = {:.3}", osc_addr, val);
                 msgs.push(Self::make_float_msg(&osc_addr, val));
                 cache.insert(osc_addr, val);
             }
@@ -243,7 +242,6 @@ impl ConnectivityManager {
                 None => true,
             };
             if send {
-                println!("[OSC] Track {} = [{:.3}, {:.3}, {:.3}]", addr, x, y, z);
                 msgs.push(Self::make_vec3_msg(addr, x, y, z));
                 cache.insert(addr.to_string(), x);
                 cache.insert(format!("{}y", addr), y);
