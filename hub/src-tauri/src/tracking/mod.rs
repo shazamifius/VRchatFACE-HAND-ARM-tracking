@@ -472,6 +472,25 @@ impl TrackingEngine {
                 let output = solver.solve(&tracking_data, cam_w, cam_h);
                 let solve_ms = t_solve.elapsed().as_secs_f32() * 1000.0;
 
+                // [OSC OUT] 1 Hz dump of the ACTUAL values the engine emits, so the
+                // real output can be observed from logs (independent of VRChat/avatar).
+                if _last_log.elapsed().as_secs_f32() >= 1.0 {
+                    _last_log = std::time::Instant::now();
+                    let g = |key: &str| output.params.iter().find(|(k, _)| k == key).map(|(_, v)| *v);
+                    println!(
+                        "[OSC OUT] params={} | Jaw={:.2} BlinkL={:.2} BlinkR={:.2} EyesX={:+.2} EyesY={:+.2} | HeadYaw={:+.2} HeadPitch={:+.2} HeadRoll={:+.2}",
+                        output.params.len(),
+                        g("JawOpen").unwrap_or(-1.0),
+                        g("EyeBlinkLeft").unwrap_or(-1.0),
+                        g("EyeBlinkRight").unwrap_or(-1.0),
+                        g("EyesX").unwrap_or(-9.0),
+                        g("EyesY").unwrap_or(-9.0),
+                        g("HeadYaw").unwrap_or(-9.0),
+                        g("HeadPitch").unwrap_or(-9.0),
+                        g("HeadRoll").unwrap_or(-9.0),
+                    );
+                }
+
                 // 3. Send to VRChat (profiled)
                 let has_data = !output.params.is_empty() || !output.trackers.is_empty();
                 let mut osc_ms = 0.0f32;

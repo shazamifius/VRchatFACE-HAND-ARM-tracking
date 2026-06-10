@@ -183,7 +183,11 @@ impl InferenceEngine {
                         // Lost-tracking is handled by the periodic re-detect, which
                         // clears face_roi when the detector returns no faces.
                         let points: Vec<[f32; 3]> = landmarks.iter().map(|p| [p.0, p.1, p.2]).collect();
-                        self.face_roi = Some(Self::face_roi_from_landmarks(&landmarks, (xc, yc, scale, theta)));
+                        // Re-detect the face fresh every frame (clear the ROI). The
+                        // landmark-derived ROI feedback is disabled for the face: it
+                        // added drift risk for little gain now that detection is cheap
+                        // and correct. (Hands still use cached ROIs.)
+                        self.face_roi = None;
                         face_landmarks = Some(points);
                     }
                     Err(e) => {

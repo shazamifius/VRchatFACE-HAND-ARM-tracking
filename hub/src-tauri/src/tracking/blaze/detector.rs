@@ -140,26 +140,29 @@ impl BlazeDetector {
             println!("[AI DEBUG] NMS kept {} face detections", filtered.len());
         }
 
-        // 6. Denormalize to original image
+        // 6. Denormalize to original image.
+        // decode_boxes returns NORMALIZED [0,1] coords (anchor centers are [0,1]).
+        // To undo the letterbox we must first scale them to input-pixel space
+        // (×input_size), THEN remove padding and the resize scale:
+        //   orig = (coord * input_size - pad) / scale
+        // The missing ×input_size collapsed every box to ~(2,-137) (top-left),
+        // which crushed all landmarks to a point — broke face AND hand tracking.
+        let in_w = self.input_size.0 as f32;
+        let in_h = self.input_size.1 as f32;
         let mut final_detections = Vec::new();
         for det in filtered {
             let mut d = det.clone();
-            // Undo padding and scaling
-            // x_new = (x_old * input_size - pad) / scale
-            
-            // Current coordinates are absolute in input_size domain because of decode_boxes using scale/anchor size
-            // Wait, decode_boxes uses config.x_scale which is input_size. So coords are pixels in [0, input_size].
-            
-            d.xmin = (d.xmin - pad_w) / scale;
-            d.xmax = (d.xmax - pad_w) / scale;
-            d.ymin = (d.ymin - pad_h) / scale;
-            d.ymax = (d.ymax - pad_h) / scale;
-            
+
+            d.xmin = (d.xmin * in_w - pad_w) / scale;
+            d.xmax = (d.xmax * in_w - pad_w) / scale;
+            d.ymin = (d.ymin * in_h - pad_h) / scale;
+            d.ymax = (d.ymax * in_h - pad_h) / scale;
+
             for k in 0..d.keypoints.len() {
-                d.keypoints[k].0 = (d.keypoints[k].0 - pad_w) / scale;
-                d.keypoints[k].1 = (d.keypoints[k].1 - pad_h) / scale;
+                d.keypoints[k].0 = (d.keypoints[k].0 * in_w - pad_w) / scale;
+                d.keypoints[k].1 = (d.keypoints[k].1 * in_h - pad_h) / scale;
             }
-            
+
             final_detections.push(d);
         }
 
