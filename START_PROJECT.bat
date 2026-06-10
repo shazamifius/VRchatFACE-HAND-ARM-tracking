@@ -71,6 +71,17 @@ if not exist "%~dp0hub\src-tauri\cloudflared.exe" (
     )
 )
 
+:: [NEW] Auto-Setup VMT (SteamVR virtual trackers for full body) - self-repairing.
+:: Idempotent: re-registers the driver and re-applies headless settings every
+:: launch, so a SteamVR update can't silently break full-body tracking.
+echo.
+echo [INFO] Ensuring SteamVR / VMT driver (full-body output)...
+powershell -ExecutionPolicy Bypass -File "%~dp0hub\setup_vmt.ps1"
+if %ERRORLEVEL% NEQ 0 (
+    echo [INFO] VMT/SteamVR not fully ready yet ^(see messages above^). The app
+    echo        still runs; full-body needs SteamVR + VMT installed.
+)
+
 :MENU
 cls
 echo ========================================================
