@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>VRChat Bridge Camera</title>
+    <style>
+        :root {
+            --bg-primary: #0a0e14;
+            --bg-secondary: #111820;
+            --accent-primary: #58a6ff;
+            --danger: #f85149;
+            --success: #3fb950;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .header {
+            padding: 15px;
+            background: var(--bg-secondary);
+            text-align: center;
+            border-bottom: 1px solid #30363d;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-weight: bold;
+            color: var(--accent-primary);
+        }
+
+        .status {
+            font-size: 0.8rem;
+            padding: 4px 8px;
+            border-radius: 12px;
+            background: #21262d;
+            color: var(--text-secondary);
+        }
+
+        .status.connected {
+            background: rgba(63, 185, 80, 0.2);
+            color: var(--success);
+        }
+
+        .main-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        .overlay-controls {
+            position: absolute;
+            bottom: 30px;
+            left: 0;
+            width: 100%;
+            z-index: 2;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+        }
+
+        .btn {
+            background: var(--accent-primary);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            border-radius: 30px;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(88, 166, 255, 0.3);
+            transition: transform 0.1s;
+        }
+
+        .btn:active {
+            transform: scale(0.95);
+        }
+
+        .btn-stop {
+            background: var(--danger);
+            box-shadow: 0 4px 12px rgba(248, 81, 73, 0.3);
+            display: none;
+        }
+
+        .info-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 2;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px;
+            border-radius: 8px;
+            backdrop-filter: blur(4px);
+        }
+
+        .info-item {
+            font-size: 0.8rem;
+            margin-bottom: 4px;
+        }
+    </style>
+    <style>
+        /* [NEW] Premium UI Styles */
+        .start-card {
+            background: rgba(16, 20, 26, 0.9);
+            backdrop-filter: blur(20px);
+            padding: 30px;
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+            text-align: center;
+            max-width: 90%;
+            width: 320px;
+        }
+
+        .title {
+            font-size: 1.5rem;
+            font-weight: 800;
+            margin-bottom: 5px;
+            background: linear-gradient(135deg, #fff 0%, #888 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            color: #8b949e;
+            font-size: 0.9rem;
+            margin-bottom: 25px;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        .input-label {
+            display: block;
+            color: #8b949e;
+            font-size: 0.8rem;
+            margin-bottom: 8px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .text-input {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            padding: 12px;
+            border-radius: 12px;
+            font-size: 1rem;
+            box-sizing: border-box;
+        }
+
+        .text-input:focus {
+            border-color: var(--accent-primary);
+            outline: none;
+        }
+
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        input[type=range] {
+            flex: 1;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            appearance: none;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: var(--accent-primary);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(88, 166, 255, 0.5);
+        }
+
+        .btn-start {
+            width: 100%;
+            padding: 18px;
+            font-size: 1.2rem;
+            background: linear-gradient(135deg, #238636 0%, #2ea043 100%);
+            border: none;
+            box-shadow: 0 4px 20px rgba(46, 160, 67, 0.4);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 8px 16px;
+            font-size: 0.9rem;
+            margin-top: 10px;
+        }
+
+        /* [NEW] Centered container for the Start Button */
+        .start-container {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <div class="logo">VRChat Bridge (Debug)</div>
+        <div class="status" id="connection-status">Disconnected</div>
+    </div>
+
+    <div class="main-container">
+        <video id="camera-feed" autoplay playsinline muted></video>
+
+        <div class="info-overlay">
+            <div class="info-item" id="resolution-info">Resolution: -</div>
+            <div class="info-item" id="fps-info">FPS: -</div>
+        </div>
+
+        <!-- [CHANGED] Start button is now centered in the middle of the screen -->
+        <div class="start-container" id="start-container">
+            <div class="start-card">
+                <div class="title">Camera Stream</div>
+                <div class="subtitle">Connect to VRChat Bridge</div>
+
+                <div class="input-group">
+                    <label class="input-label">PC IP Address</label>
+                    <div style="display:flex; gap:10px;">
+                        <input type="text" id="ip-input" class="text-input" placeholder="192.168.x.x">
+                        <button id="save-ip-btn" class="btn btn-secondary" style="margin:0; width:auto;">Set</button>
+                    </div>
+                </div>
+
+                <div class="input-group">
+                    <label class="input-label">
+                        Quality: <span id="quality-val" style="color:var(--accent-primary)">0.6</span>
+                    </label>
+                    <div class="slider-container">
+                        <span style="font-size:0.8rem; opacity:0.5">Fast</span>
+                        <input type="range" id="quality-slider" min="0.1" max="1.0" step="0.1" value="0.6">
+                        <span style="font-size:0.8rem; opacity:0.5">HD</span>
+                    </div>
+                </div>
+
+                <button class="btn btn-start" id="start-btn">Start Streaming</button>
+            </div>
+        </div>
+
+        <div class="overlay-controls">
+            <!-- switch and stop buttons remain at the bottom -->
+            <button class="btn" id="switch-btn" style="display:none; background: #30363d;">Switch Cam</button>
+            <button class="btn btn-stop" id="stop-btn">Stop</button>
+        </div>
+
+        <div id="debug-console" style="
+            position: absolute; 
+            bottom: 10px; 
+            left: 10px; 
+            right: 10px; 
+            height: 200px; 
+            background: rgba(0,0,0,0.8); 
+            color: #00ff00; 
+            font-family: monospace; 
+            font-size: 12px; 
+            overflow-y: scroll; 
+            z-index: 100;
+            padding: 5px;
+            border: 1px solid white;
+            display: block; /* [FIX] Always visible */
+        ">
+            <div>[Log] Console Initialized...</div>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('camera-feed');
+        const startBtn = document.getElementById('start-btn');
+        const startContainer = document.getElementById('start-container');
+        const stopBtn = document.getElementById('stop-btn');
+        const switchBtn = document.getElementById('switch-btn');
+        const statusEl = document.getElementById('connection-status');
+        const resInfo = document.getElementById('resolution-info');
+        const fpsInfo = document.getElementById('fps-info');
+        const debugConsole = document.getElementById('debug-console');
+
+        // Custom Logger
+        function log(msg) {
+            const line = document.createElement('div');
+            line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            debugConsole.appendChild(line);
+            debugConsole.scrollTop = debugConsole.scrollHeight;
+            console.log(msg);
+        }
+
+        window.onerror = function (msg, url, line) {
+            log(`ERROR: ${msg} (${line})`);
+            return false;
+        };
+
+        log("Script loaded. Waiting for user interaction...");
+
+        let stream = null;
+        let active = false;
+        let frameCount = 0;
+        let lastFrameTime = performance.now();
+        let canvas = document.createElement('canvas');
+        let ctx = canvas.getContext('2d');
+        let currentFacingMode = 'user';
+        let quality = 0.6; // [NEW] Default Quality
+
+        // [NEW] IP Handling
+        const ipInput = document.getElementById('ip-input');
+        const saveIpBtn = document.getElementById('save-ip-btn');
+        const qualitySlider = document.getElementById('quality-slider');
+        const qualityVal = document.getElementById('quality-val');
+
+        // Load saved IP
+        const savedIp = localStorage.getItem('pc_ip');
+        if (savedIp) {
+            ipInput.value = savedIp;
+        } else {
+            ipInput.value = window.location.hostname; // Default to current host
+        }
+
+        saveIpBtn.onclick = () => {
+            const ip = ipInput.value.trim();
+            if (ip) {
+                localStorage.setItem('pc_ip', ip);
+                // Redirect to new IP if different
+                if (window.location.hostname !== ip) {
+                    window.location.href = `http://${ip}:9001/`;
+                } else {
+                    alert("IP Saved!");
+                }
+            }
+        };
+
+        qualitySlider.oninput = (e) => {
+            quality = parseFloat(e.target.value);
+            qualityVal.textContent = quality.toFixed(1);
+        };
+
+        startBtn.onclick = async () => {
+            await startCamera(currentFacingMode);
+        };
+
+        switchBtn.onclick = async () => {
+            currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+            log(`Switching to ${currentFacingMode}...`);
+            await startCamera(currentFacingMode);
+        };
+
+        async function startCamera(facingMode) {
+            log("Start button clicked.");
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+
+            log(`Requesting getUserMedia (${facingMode})...`);
+            try {
+                // Ensure playsinline is set (critical for iOS/Mobile)
+                video.setAttribute('playsinline', '');
+                video.setAttribute('webkit-playsinline', '');
+
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: facingMode,
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        frameRate: { ideal: 30 }
+                    }
+                });
+                video.srcObject = stream;
+
+                // [FIX] Wait for loadedmetadata BEFORE playing
+                video.onloadedmetadata = async () => {
+                    log(`Metadata loaded: ${video.videoWidth}x${video.videoHeight}`);
+
+                    if (video.videoWidth === 0 || video.videoHeight === 0) {
+                        log("Error: Video dimensions are 0. Retrying...");
+                        setTimeout(() => startCamera(facingMode), 1000);
+                        return;
+                    }
+
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    resInfo.textContent = `Res: ${video.videoWidth}x${video.videoHeight}`;
+
+                    try {
+                        log("Attempting video.play()...");
+                        await video.play();
+                        log("Video playing.");
+
+                        startContainer.style.display = 'none';
+                        stopBtn.style.display = 'block';
+                        switchBtn.style.display = 'block';
+
+                        active = true;
+                        statusEl.textContent = 'Streaming...';
+                        statusEl.classList.add('connected');
+                        log("Streaming started.");
+                        sendFrameLoop();
+
+                    } catch (e) {
+                        log("Play Error: " + e.message);
+                    }
+                };
+            } catch (e) {
+                log(`CAMERA FAIL: ${e.name} - ${e.message}`);
+                alert("Camera Error: " + e.message);
+            }
+        }
+
+        stopBtn.onclick = () => {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+            active = false;
+            startContainer.style.display = 'block';
+            stopBtn.style.display = 'none';
+            switchBtn.style.display = 'none';
+            statusEl.textContent = 'Disconnected';
+            statusEl.classList.remove('connected');
+            log("Camera stopped.");
+        };
+
+        async function sendFrameLoop() {
+            if (!active) return;
+
+            const now = performance.now();
+            frameCount++;
+            if (now - lastFrameTime >= 1000) {
+                fpsInfo.textContent = `FPS: ${frameCount}`;
+                frameCount = 0;
+                lastFrameTime = now;
+            }
+
+            try {
+                // Force dimensions
+                if (canvas.width > 0 && canvas.height > 0) {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                    canvas.toBlob(async (blob) => {
+                        if (blob && active) {
+                            if (blob.size < 1000) {
+                                // Suspiciously small blob
+                                log(`Warning: Blob too small (${blob.size} bytes). Retrying...`);
+                            } else {
+                                try {
+                                    // [FIX] Use relative protocol-agnostic path for Cloudflare HTTPS compatibility
+                                    const pushUrl = window.location.origin + '/push';
+                                    const response = await fetch(pushUrl, {
+                                        method: 'POST',
+                                        body: blob
+                                    });
+                                    if (!response.ok) { /* ignore */ }
+                                } catch (e) { /* internet gone */ }
+                            }
+                        }
+                        if (active) requestAnimationFrame(sendFrameLoop);
+                    }, 'image/jpeg', quality);
+                } else {
+                    if (active) requestAnimationFrame(sendFrameLoop);
+                }
+            } catch (e) {
+                log("Loop Error: " + e.message);
+                if (active) requestAnimationFrame(sendFrameLoop);
+            }
+        }
+    </script>
+</body>
+
+</html>

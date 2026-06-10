@@ -1,0 +1,89 @@
+# Node
+node_modules/
+hub/node_modules/
+
+# Rust
+target/
+hub/src-tauri/target/
+
+# Vcpkg
+vcpkg/
+vcpkg_installed/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.sln.docstates
+*.VC.db
+*.VC.opendb
+
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# AI Models (too large, downloaded via script)
+models/*.onnx
+models/*.task
+models/*.tflite
+
+# Keep models directory structure
+!models/.gitkeep
+
+# Cloudflared binary (downloaded automatically)
+scripts/cloudflared/*.exe
+
+# Logs
+*.log
+*.tmp
+
+# OS specific
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Temporary files
+*.bak
+*.cache
+
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.class
+
+# Large binary archives (downloaded separately)
+*.zip
+ort_*/
+ort_extract*/
+ort_final_extract/
+ort_temp/
+
+# Runtime binaries (downloaded via scripts)
+hub/src-tauri/onnxruntime.dll
+hub/src-tauri/cloudflared.exe
+hub/src-tauri/*.tflite
+
+# Archive/backup
+_ARCHIVE/
+
+# Misc
+imgui.ini
+
+# Graphify analysis output (knowledge graph, not project code)
+graphify-out/
