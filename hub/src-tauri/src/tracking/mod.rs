@@ -562,36 +562,21 @@ impl TrackingEngine {
                     }
                 }
 
-                // --- HEAD OUTPUT --- Fuse mouse-look with the webcam head
-                // orientation and forward it to the virtual HMD. Mouse-look adds
-                // yaw (world-up) + pitch (local-right) composed IN FRONT of the
-                // webcam quaternion, so the user gets a full 360° turn plus the
-                // webcam's natural head motion. Rotation only; eye height stays
-                // fixed at standing so the view can't sink to the floor. Mouse is
-                // polled every frame (cursor only captured while RMB is held).
+                // --- HEAD OUTPUT --- Forward the head orientation to the virtual
+                // HMD and use it to anchor the controllers (gaze laser).
                 let (mouse_yaw, mouse_pitch) = mouse_look.poll();
-                let g = |key: &str| output.params.iter().find(|(k, _)| k == key).map(|(_, v)| *v);
-                // The fused head orientation (xyzw), shared by the HMD and the
-                // controller anchoring below. Falls back to identity when the
-                // webcam has no head quaternion this frame so mouse-look still
-                // works (and the hands stay anchored to the look direction).
+                // Head orientation = MOUSE-LOOK ONLY. The webcam head pose (PnP on
+                // face landmarks, SYS_HEAD_ROT_*) is too unstable for the HMD: it
+                // injects roll (view ends up on its side), inverts pitch, and jumps
+                // wildly — and a tilted/jittery orientation when VRChat calibrates
+                // on world entry breaks the avatar (10 cm tall, frozen). The webcam
+                // still drives the face blendshapes over OSC; it just no longer
+                // rotates the headset. Pure yaw+pitch = always upright, no roll.
                 let head_quat = {
-                    use nalgebra::{Quaternion, UnitQuaternion, Vector3};
-                    let q_cam = match (
-                        g("SYS_HEAD_ROT_X"),
-                        g("SYS_HEAD_ROT_Y"),
-                        g("SYS_HEAD_ROT_Z"),
-                        g("SYS_HEAD_ROT_W"),
-                    ) {
-                        (Some(qx), Some(qy), Some(qz), Some(qw)) => {
-                            // nalgebra Quaternion is (w, i, j, k); wire order is xyzw.
-                            UnitQuaternion::from_quaternion(Quaternion::new(qw, qx, qy, qz))
-                        }
-                        _ => UnitQuaternion::identity(),
-                    };
+                    use nalgebra::{UnitQuaternion, Vector3};
                     let q_yaw = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), mouse_yaw);
                     let q_pitch = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), mouse_pitch);
-                    let q = (q_yaw * q_pitch * q_cam).into_inner();
+                    let q = (q_yaw * q_pitch).into_inner();
                     [q.i, q.j, q.k, q.w]
                 };
                 if let Some(head) = &head {
