@@ -8,9 +8,9 @@
 #  It is fully IDEMPOTENT - safe to re-run any number of times:
 #    1. Locate Steam + SteamVR.
 #    2. Download + extract the VMT driver (only if missing).
-#    3. Register the VMT driver with SteamVR via vrpathreg (re-register = repair).
-#    4. Patch steamvr.vrsettings for a HEADLESS rig (null HMD, no physical
-#       headset) so VRChat can enter VR mode and accept our virtual trackers.
+#    3. Register the VMT driver AND our vrcbridge HMD driver via vrpathreg.
+#    4. Patch steamvr.vrsettings so OUR vrcbridge HMD is the active headset
+#       (null HMD DISABLED) and VRChat can enter VR mode + accept our trackers.
 #
 #  Exit code 0 = VMT ready (or best-effort done). Non-zero = SteamVR missing.
 # ============================================================================
@@ -135,9 +135,31 @@ try {
     exit 5
 }
 
-# --- 4. Patch steamvr.vrsettings for a HEADLESS rig -------------------------
-# Webcam-only, no physical headset: enable the null HMD so SteamVR starts, and
-# allow multiple drivers so VMT trackers are visible. Backed up once.
+# --- 3b. Register OUR vrcbridge HMD driver (self-healing) -------------------
+# The virtual HMD (head rotation + controllers + flat view) lives under
+# hub/tools/vrcbridge. Re-register every launch so a SteamVR update or a moved
+# folder can't silently drop it.
+try {
+    $VrcBridgeDir = Join-Path $ScriptDir "tools\vrcbridge"
+    if (Test-Path (Join-Path $VrcBridgeDir "bin\win64\driver_vrcbridge.dll")) {
+        & $VrPathReg removedriver "$VrcBridgeDir" 2>$null | Out-Null
+        & $VrPathReg adddriver "$VrcBridgeDir" | Out-Null
+        Ok "vrcbridge HMD driver registered with SteamVR."
+    } else {
+        Warn "vrcbridge driver DLL not found at $VrcBridgeDir (run driver\deploy_driver.ps1)."
+    }
+} catch {
+    Warn "vrcbridge registration failed: $($_.Exception.Message)"
+}
+
+# --- 4. Patch steamvr.vrsettings for OUR virtual HMD ------------------------
+# Webcam-only, no physical headset: force OUR vrcbridge HMD (head rotation,
+# anti-standby, flat full-screen view) as the active headset and DISABLE the
+# stock null HMD so they don't conflict. activateMultipleDrivers keeps VMT's
+# body trackers alive alongside it. Backed up once.
+#
+# IMPORTANT: this used to force "null", which silently overrode the vrcbridge
+# HMD every launch (head wouldn't turn, stuck "En veille"). Do NOT revert.
 $VrSettings = Join-Path $SteamPath "config\steamvr.vrsettings"
 try {
     if (-not (Test-Path (Split-Path $VrSettings))) {
@@ -161,17 +183,18 @@ try {
         $json | Add-Member -NotePropertyName "steamvr" -NotePropertyValue ([PSCustomObject]@{}) -Force
     }
     Set-Prop $json.steamvr "requireHmd" $false
-    Set-Prop $json.steamvr "forcedDriver" "null"
+    Set-Prop $json.steamvr "forcedDriver" "vrcbridge"
     Set-Prop $json.steamvr "activateMultipleDrivers" $true
 
-    # driver_null section (the virtual/static HMD)
+    # driver_null section (stock static HMD) - DISABLE so it can't take over as
+    # the active HMD instead of our vrcbridge driver.
     if (-not ($json.PSObject.Properties.Name -contains "driver_null")) {
         $json | Add-Member -NotePropertyName "driver_null" -NotePropertyValue ([PSCustomObject]@{}) -Force
     }
-    Set-Prop $json.driver_null "enable" $true
+    Set-Prop $json.driver_null "enable" $false
 
     $json | ConvertTo-Json -Depth 20 | Set-Content -Path $VrSettings -Encoding utf8
-    Ok "steamvr.vrsettings patched for headless (null HMD). Backup: steamvr.vrsettings.bak"
+    Ok "steamvr.vrsettings patched: vrcbridge HMD active, null HMD disabled. Backup: steamvr.vrsettings.bak"
     if (Get-Process -Name vrserver, vrmonitor -ErrorAction SilentlyContinue) {
         Warn "SteamVR is running - restart it so the new settings take effect."
     }
