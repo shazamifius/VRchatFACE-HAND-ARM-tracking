@@ -16,7 +16,7 @@
 //! matching `ControllerInputPacket` in driver/src/driver_main.cpp.
 
 use anyhow::Result;
-use nalgebra::{UnitQuaternion, Vector3};
+use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 use std::net::UdpSocket;
 
 // Button bits — must match `enum ControllerButton` in the C++ driver.
@@ -30,28 +30,18 @@ const BTN_THUMBSTICK: u32 = 1 << 4;
 #[allow(dead_code)]
 const BTN_GRIP: u32 = 1 << 5;
 
-/// Minimal Win32 bindings for global key/mouse/screen state.
+/// Minimal Win32 bindings for global keyboard state.
 #[cfg(windows)]
 mod sys {
-    #[repr(C)]
-    pub struct POINT {
-        pub x: i32,
-        pub y: i32,
-    }
-
     #[link(name = "user32")]
     extern "system" {
         pub fn GetAsyncKeyState(v_key: i32) -> i16;
-        pub fn GetCursorPos(point: *mut POINT) -> i32;
-        pub fn GetSystemMetrics(index: i32) -> i32;
         pub fn MapVirtualKeyW(u_code: u32, u_map_type: u32) -> u32;
     }
 
     pub const VK_LBUTTON: i32 = 0x01;
     pub const VK_TAB: i32 = 0x09;
     pub const VK_SPACE: i32 = 0x20;
-    pub const SM_CXSCREEN: i32 = 0;
-    pub const SM_CYSCREEN: i32 = 1;
 
     // Physical scancodes (Set 1) for the WASD movement cluster. We resolve them
     // to virtual keys via the ACTIVE layout, so the same physical keys work on
@@ -96,9 +86,6 @@ impl ControllerInput {
     const ADDR: &'static str = "127.0.0.1:39572";
     /// Eye height the head sits at (matches HeadBridge / driver default).
     const HEAD_Y: f32 = 1.6;
-    /// Max laser sweep from center, radians (mouse at screen edge).
-    const AIM_YAW_RANGE: f32 = 0.7; // ~40°
-    const AIM_PITCH_RANGE: f32 = 0.5; // ~29°
 
     pub fn new() -> Result<Self> {
         let socket = UdpSocket::bind("0.0.0.0:0")?;
@@ -109,32 +96,18 @@ impl ControllerInput {
     }
 
     /// Poll mouse+keyboard and drive both hands. `head_quat_xyzw` is the current
-    /// fused head orientation, so the hands and laser stay anchored in front of
-    /// wherever the user is looking. `rmb_held` suppresses laser re-aim while the
-    /// user is head-looking (the cursor is captured then).
+    /// fused head orientation (mouse-look + webcam). The laser points along it —
+    /// a "gaze reticle": you aim by turning your head with the mouse, and left
+    /// click selects. This is far more predictable than mapping the cursor into
+    /// a 3D laser, which felt scrambled.
     #[cfg(windows)]
-    pub fn update(&self, _head_quat_xyzw: [f32; 4], rmb_held: bool) -> Result<()> {
-        // --- Mouse aim -> laser direction in a fixed world frame ---
-        let (aim_yaw, aim_pitch) = if rmb_held {
-            (0.0, 0.0) // head-look mode: keep laser pointing straight ahead
-        } else {
-            unsafe {
-                let sw = sys::GetSystemMetrics(sys::SM_CXSCREEN).max(1) as f32;
-                let sh = sys::GetSystemMetrics(sys::SM_CYSCREEN).max(1) as f32;
-                let mut p = sys::POINT { x: 0, y: 0 };
-                if sys::GetCursorPos(&mut p) != 0 {
-                    let nx = (p.x as f32 / sw) * 2.0 - 1.0; // [-1,1], left->right
-                    let ny = (p.y as f32 / sh) * 2.0 - 1.0; // [-1,1], top->bottom
-                    // Signs chosen so the laser follows the cursor 1:1 (right ->
-                    // right, up -> up) — corrects the inverted aim the user saw.
-                    (nx * Self::AIM_YAW_RANGE, -ny * Self::AIM_PITCH_RANGE)
-                } else {
-                    (0.0, 0.0)
-                }
-            }
-        };
-        let q_aim = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), aim_yaw)
-            * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), aim_pitch);
+    pub fn update(&self, head_quat_xyzw: [f32; 4]) -> Result<()> {
+        let q_head = UnitQuaternion::from_quaternion(Quaternion::new(
+            head_quat_xyzw[3],
+            head_quat_xyzw[0],
+            head_quat_xyzw[1],
+            head_quat_xyzw[2],
+        ));
 
         // --- Buttons / axes ---
         let (lmb, tab, space, tx, ty) = unsafe {
@@ -170,15 +143,15 @@ impl ControllerInput {
             right_buttons |= BTN_A; // jump
         }
 
-        // Hand world poses in a FIXED frame (NOT composed with the webcam head
-        // orientation). Composing with the tumbling webcam head was what made
-        // the laser axes feel scrambled ("right is up, up is left"); a stable
-        // world frame makes the mouse->laser mapping fully predictable.
-        let right_pos = Vector3::new(0.2, Self::HEAD_Y - 0.3, -0.3);
-        let left_pos = Vector3::new(-0.2, Self::HEAD_Y - 0.3, -0.3);
+        // Hands sit just in front of the head and point along the gaze, so the
+        // right-hand laser acts as a center reticle: look at a target (mouse
+        // turns the head), then left click to select.
+        let head_pos = Vector3::new(0.0, Self::HEAD_Y, 0.0);
+        let right_pos = head_pos + q_head * Vector3::new(0.12, -0.12, -0.15);
+        let left_pos = head_pos + q_head * Vector3::new(-0.12, -0.12, -0.15);
 
-        let q_right = q_aim;
-        let q_left = UnitQuaternion::identity();
+        let q_right = q_head;
+        let q_left = q_head;
 
         let right = HandState {
             hand: 1,
@@ -203,7 +176,7 @@ impl ControllerInput {
     }
 
     #[cfg(not(windows))]
-    pub fn update(&self, _head_quat_xyzw: [f32; 4], _rmb_held: bool) -> Result<()> {
+    pub fn update(&self, _head_quat_xyzw: [f32; 4]) -> Result<()> {
         Ok(())
     }
 

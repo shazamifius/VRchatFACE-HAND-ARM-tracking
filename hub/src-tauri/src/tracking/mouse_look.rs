@@ -28,8 +28,8 @@ mod sys {
         pub fn SetCursorPos(x: i32, y: i32) -> i32;
     }
 
-    /// Right mouse button virtual-key code.
-    pub const VK_RBUTTON: i32 = 0x02;
+    /// Left Alt virtual-key code — held to RELEASE the captured cursor.
+    pub const VK_LMENU: i32 = 0xA4;
 }
 
 pub struct MouseLook {
@@ -70,37 +70,43 @@ impl MouseLook {
     }
 
     /// Poll the OS mouse once. Call every logic frame. Returns the accumulated
-    /// `(yaw, pitch)` in radians. While the right button is held the cursor is
-    /// re-centered so it stays captured; otherwise the cursor is left free.
+    /// `(yaw, pitch)` in radians.
+    ///
+    /// Mouse-look is ACTIVE BY DEFAULT (the mouse turns the head like a normal
+    /// PC game): each frame we read the cursor delta, accumulate it, and re-center
+    /// the cursor so it never leaves the screen. **Hold Left Alt** to release the
+    /// cursor for desktop use (clicking SteamVR buttons, alt-tab, etc.).
     #[cfg(windows)]
     pub fn poll(&mut self) -> (f32, f32) {
         unsafe {
-            // High bit set => key is currently down.
-            let held = (sys::GetAsyncKeyState(sys::VK_RBUTTON) as u16 & 0x8000) != 0;
-            if held {
-                let mut p = sys::POINT { x: 0, y: 0 };
-                if sys::GetCursorPos(&mut p) != 0 {
-                    if !self.active {
-                        // Just pressed: anchor here, emit no delta this frame.
-                        self.active = true;
-                        self.anchor_x = p.x;
-                        self.anchor_y = p.y;
-                    } else {
-                        let dx = (p.x - self.anchor_x) as f32;
-                        let dy = (p.y - self.anchor_y) as f32;
-                        self.yaw += dx * self.sensitivity;
-                        // Mouse up (dy < 0) looks up.
-                        self.pitch += dy * self.sensitivity;
-                        self.pitch = self
-                            .pitch
-                            .clamp(-Self::PITCH_LIMIT_RAD, Self::PITCH_LIMIT_RAD);
-                        // Re-center to the anchor so the cursor never escapes and
-                        // the next frame's delta is measured from the same point.
-                        sys::SetCursorPos(self.anchor_x, self.anchor_y);
-                    }
-                }
-            } else {
+            // Hold Left Alt to temporarily release the cursor.
+            let released = (sys::GetAsyncKeyState(sys::VK_LMENU) as u16 & 0x8000) != 0;
+            if released {
                 self.active = false;
+                return (self.yaw, self.pitch);
+            }
+
+            let mut p = sys::POINT { x: 0, y: 0 };
+            if sys::GetCursorPos(&mut p) != 0 {
+                if !self.active {
+                    // Just (re)captured: anchor here, emit no delta this frame.
+                    self.active = true;
+                    self.anchor_x = p.x;
+                    self.anchor_y = p.y;
+                } else {
+                    let dx = (p.x - self.anchor_x) as f32;
+                    let dy = (p.y - self.anchor_y) as f32;
+                    // Standard non-inverted FPS look: mouse right -> look right,
+                    // mouse up -> look up.
+                    self.yaw -= dx * self.sensitivity;
+                    self.pitch -= dy * self.sensitivity;
+                    self.pitch = self
+                        .pitch
+                        .clamp(-Self::PITCH_LIMIT_RAD, Self::PITCH_LIMIT_RAD);
+                    // Re-center so the cursor never escapes and next frame's delta
+                    // is measured from the same point.
+                    sys::SetCursorPos(self.anchor_x, self.anchor_y);
+                }
             }
         }
         (self.yaw, self.pitch)
@@ -113,9 +119,9 @@ impl MouseLook {
         (self.yaw, self.pitch)
     }
 
-    /// Whether the right mouse button was held at the last `poll` (i.e. we're in
-    /// head-look mode). Used to suppress laser re-aim while looking around.
-    pub fn rmb_held(&self) -> bool {
+    /// Whether the mouse is currently captured for head-look (false while Left
+    /// Alt is held to free the cursor). Used for diagnostics.
+    pub fn is_capturing(&self) -> bool {
         self.active
     }
 }

@@ -594,7 +594,7 @@ impl TrackingEngine {
                     }
                 }
                 if let Some(controllers) = &controllers {
-                    if let Err(e) = controllers.update(head_quat, mouse_look.rmb_held()) {
+                    if let Err(e) = controllers.update(head_quat) {
                         eprintln!("[Rust] Controller send error: {}", e);
                     }
                 }
@@ -620,9 +620,9 @@ impl TrackingEngine {
                     // [HMD OUT] What we actually stream to the virtual headset, so
                     // we can tell whether head rotation is even moving and why.
                     println!(
-                        "[HMD OUT] face_webcam={} | mouse_look(RMB held={}) yaw={:+.2} pitch={:+.2} | head_quat=[{:+.2} {:+.2} {:+.2} {:+.2}]",
+                        "[HMD OUT] face_webcam={} | mouse(captured={}) yaw={:+.2} pitch={:+.2} | head_quat=[{:+.2} {:+.2} {:+.2} {:+.2}]",
                         if face_seen { "YES" } else { "no" },
-                        mouse_look.rmb_held(),
+                        mouse_look.is_capturing(),
                         mouse_yaw,
                         mouse_pitch,
                         head_quat[0], head_quat[1], head_quat[2], head_quat[3],

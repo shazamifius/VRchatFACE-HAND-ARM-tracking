@@ -54,5 +54,5 @@ if ($code -ne 0) {
 
 Write-Host ""
 Write-Host "Done. Now relaunch SteamVR, then start the app (START_PROJECT.bat)." -ForegroundColor Green
-Write-Host "Controls: mouse = laser aim, left click = select, hold RMB = look," -ForegroundColor Green
-Write-Host "          WASD = move, Tab = menu, Space = jump." -ForegroundColor Green
+Write-Host "Controls: MOUSE = turn head (laser = gaze reticle), left click = select," -ForegroundColor Green
+Write-Host "          WASD/ZQSD = move, Tab = menu, Space = jump, HOLD Left Alt = free cursor." -ForegroundColor Green

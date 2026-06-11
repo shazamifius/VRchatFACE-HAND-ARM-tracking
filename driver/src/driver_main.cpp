@@ -576,7 +576,10 @@ public:
 			m_right->RunFrame();
 	}
 
-	bool ShouldBlockStandbyMode() override { return false; }
+	// Block standby: a static virtual HMD would otherwise be put to sleep
+	// ("En veille"), which freezes the reported head pose and stops VRChat from
+	// turning the view. Combined with the always-worn proximity sensor.
+	bool ShouldBlockStandbyMode() override { return true; }
 	void EnterStandby() override {}
 	void LeaveStandby() override {}
 
