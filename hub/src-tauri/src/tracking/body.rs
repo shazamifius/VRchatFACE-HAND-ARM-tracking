@@ -17,14 +17,21 @@ const L_SHOULDER: usize = 11;
 const R_SHOULDER: usize = 12;
 const L_HIP: usize = 23;
 const R_HIP: usize = 24;
+// Ankles: reserved for a future "standing / full-body" mode. We deliberately do
+// NOT emit foot trackers in the default UPPER-BODY mode: most users sit at a
+// desk and their legs/feet are out of frame, so BlazePose extrapolates the
+// ankles wildly and the resulting foot trackers would jitter/fly in VRChat.
+#[allow(dead_code)]
 const L_ANKLE: usize = 27;
+#[allow(dead_code)]
 const R_ANKLE: usize = 28;
 
-// VMT device indices. The caller owns the id<->role map; these match the
-// comment in vmt.rs (1=hip, 2=chest, 3=left foot, 4=right foot).
+// VMT device indices. The caller owns the id<->role map.
 pub const VMT_HIP: i32 = 1;
 pub const VMT_CHEST: i32 = 2;
+#[allow(dead_code)] // reserved for standing/full-body mode
 pub const VMT_LEFT_FOOT: i32 = 3;
+#[allow(dead_code)] // reserved for standing/full-body mode
 pub const VMT_RIGHT_FOOT: i32 = 4;
 
 // Room volume the image box maps onto (metres).
@@ -50,8 +57,11 @@ fn midpoint(pose: &[[f32; 3]], a: usize, b: usize, frame_w: f32, frame_h: f32) -
     [(pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5, (pa[2] + pb[2]) * 0.5]
 }
 
-/// Build the VMT body trackers (hips, chest, both feet) from a 33-point pose.
-/// Returns empty if the pose is too short to be a real BlazePose result.
+/// Build the UPPER-BODY VMT trackers (hips + chest) from a 33-point pose.
+/// Feet are intentionally omitted (see the ankle-index comment): this targets
+/// seated/desk users where only the torso, arms and head are in frame. The
+/// chest gives "buste" + torso lean; the hips anchor VRChat's body IK; the
+/// arms/hands are driven by the hand pipeline. Returns empty for a non-pose.
 pub fn pose_to_body_trackers(pose: &[[f32; 3]], frame_w: f32, frame_h: f32) -> Vec<TrackerData> {
     if pose.len() < 33 {
         return Vec::new();
@@ -61,14 +71,10 @@ pub fn pose_to_body_trackers(pose: &[[f32; 3]], frame_w: f32, frame_h: f32) -> V
 
     let hips = midpoint(pose, L_HIP, R_HIP, frame_w, frame_h);
     let chest = midpoint(pose, L_SHOULDER, R_SHOULDER, frame_w, frame_h);
-    let left_foot = to_room(pose[L_ANKLE][0], pose[L_ANKLE][1], frame_w, frame_h);
-    let right_foot = to_room(pose[R_ANKLE][0], pose[R_ANKLE][1], frame_w, frame_h);
 
     vec![
         TrackerData { id: VMT_HIP, position: hips, rotation: IDENTITY_QUAT },
         TrackerData { id: VMT_CHEST, position: chest, rotation: IDENTITY_QUAT },
-        TrackerData { id: VMT_LEFT_FOOT, position: left_foot, rotation: IDENTITY_QUAT },
-        TrackerData { id: VMT_RIGHT_FOOT, position: right_foot, rotation: IDENTITY_QUAT },
     ]
 }
 
@@ -99,19 +105,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn body_trackers_are_anatomically_ordered() {
+    fn upper_body_trackers_are_anatomically_ordered() {
         let pose = synthetic_standing_pose(0.0);
         let trackers = pose_to_body_trackers(&pose, 640.0, 480.0);
-        assert_eq!(trackers.len(), 4, "expected hips/chest/left+right foot");
+        assert_eq!(trackers.len(), 2, "upper-body mode = hips + chest only (no feet)");
 
         let get = |id: i32| trackers.iter().find(|t| t.id == id).unwrap().position;
         let hips = get(VMT_HIP);
         let chest = get(VMT_CHEST);
-        let lfoot = get(VMT_LEFT_FOOT);
-        let rfoot = get(VMT_RIGHT_FOOT);
 
-        // Vertical order in room space: feet < hips < chest.
-        assert!(lfoot[1] < hips[1] && rfoot[1] < hips[1], "feet must be below hips");
+        // Vertical order in room space: hips below chest.
         assert!(hips[1] < chest[1], "hips must be below chest");
         // Everything sits within the room volume.
         for t in &trackers {

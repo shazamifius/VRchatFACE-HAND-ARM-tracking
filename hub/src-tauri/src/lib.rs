@@ -267,7 +267,7 @@ pub fn run() {
                 Ok("2") => {
                     std::thread::spawn(|| match crate::tracking::vmt::VmtBridge::new() {
                         Ok(vmt) => {
-                            println!("[VMT TEST] driving a SYNTHETIC standing body (hips/chest/feet) via the real pose->tracker mapping -> watch SteamVR for 4 trackers swaying");
+                            println!("[VMT TEST] driving a SYNTHETIC upper body (hips + chest) via the real pose->tracker mapping -> watch SteamVR for 2 torso trackers swaying");
                             let start = std::time::Instant::now();
                             loop {
                                 let t = start.elapsed().as_secs_f32();

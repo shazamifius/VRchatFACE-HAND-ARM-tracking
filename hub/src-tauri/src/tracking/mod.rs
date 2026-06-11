@@ -513,10 +513,11 @@ impl TrackingEngine {
                 let output = solver.solve(&tracking_data, cam_w, cam_h);
                 let solve_ms = t_solve.elapsed().as_secs_f32() * 1000.0;
 
-                // --- VMT BODY OUTPUT --- Map the 33-pt body pose to SteamVR
-                // trackers (hips/chest/feet) and drive VMT. This is the full-body
-                // path: VRChat's IK animates the avatar's torso/legs from these
-                // real tracked devices — what OSC avatar params can't do.
+                // --- VMT BODY OUTPUT --- Map the 33-pt body pose to upper-body
+                // SteamVR trackers (hips + chest) and drive VMT. This is the
+                // body path: VRChat's IK animates the avatar's torso lean from
+                // these real tracked devices — what OSC avatar params can't do.
+                // (Feet are omitted by design for seated/desk users.)
                 if let (Some(vmt), Some(pose)) = (&vmt, &tracking_data.pose_landmarks) {
                     let body = crate::tracking::body::pose_to_body_trackers(pose, cam_w, cam_h);
                     if !body.is_empty() {
