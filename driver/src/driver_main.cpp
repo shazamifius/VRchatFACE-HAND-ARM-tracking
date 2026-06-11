@@ -222,10 +222,16 @@ public:
 
 	void GetEyeOutputViewport( EVREye eEye, uint32_t *pnX, uint32_t *pnY, uint32_t *pnWidth, uint32_t *pnHeight ) override
 	{
+		// MONO collapse: map BOTH eyes to the full window so the user sees ONE
+		// flat image instead of the side-by-side stereo "double vision". The
+		// compositor blits left then right into the same region, so the window
+		// ends up showing a single eye's view full-screen — a normal PC-like
+		// flat view, which is what desktop VRChat players want.
+		(void)eEye;
+		*pnX = 0;
 		*pnY = 0;
-		*pnWidth = kWindowWidth / 2;
+		*pnWidth = kWindowWidth;
 		*pnHeight = kWindowHeight;
-		*pnX = ( eEye == Eye_Left ) ? 0 : kWindowWidth / 2;
 	}
 
 	void GetProjectionRaw( EVREye, float *pfLeft, float *pfRight, float *pfTop, float *pfBottom ) override

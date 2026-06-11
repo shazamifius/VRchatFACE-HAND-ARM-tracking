@@ -604,6 +604,7 @@ impl TrackingEngine {
                 if _last_log.elapsed().as_secs_f32() >= 1.0 {
                     _last_log = std::time::Instant::now();
                     let g = |key: &str| output.params.iter().find(|(k, _)| k == key).map(|(_, v)| *v);
+                    let face_seen = g("SYS_HEAD_ROT_W").is_some();
                     println!(
                         "[OSC OUT] params={} | Jaw={:.2} BlinkL={:.2} BlinkR={:.2} EyesX={:+.2} EyesY={:+.2} | HeadYaw={:+.2} HeadPitch={:+.2} HeadRoll={:+.2}",
                         output.params.len(),
@@ -615,6 +616,16 @@ impl TrackingEngine {
                         g("HeadYaw").unwrap_or(-9.0),
                         g("HeadPitch").unwrap_or(-9.0),
                         g("HeadRoll").unwrap_or(-9.0),
+                    );
+                    // [HMD OUT] What we actually stream to the virtual headset, so
+                    // we can tell whether head rotation is even moving and why.
+                    println!(
+                        "[HMD OUT] face_webcam={} | mouse_look(RMB held={}) yaw={:+.2} pitch={:+.2} | head_quat=[{:+.2} {:+.2} {:+.2} {:+.2}]",
+                        if face_seen { "YES" } else { "no" },
+                        mouse_look.rmb_held(),
+                        mouse_yaw,
+                        mouse_pitch,
+                        head_quat[0], head_quat[1], head_quat[2], head_quat[3],
                     );
                 }
 
