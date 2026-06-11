@@ -112,4 +112,10 @@ impl MouseLook {
     pub fn poll(&mut self) -> (f32, f32) {
         (self.yaw, self.pitch)
     }
+
+    /// Whether the right mouse button was held at the last `poll` (i.e. we're in
+    /// head-look mode). Used to suppress laser re-aim while looking around.
+    pub fn rmb_held(&self) -> bool {
+        self.active
+    }
 }

@@ -14,6 +14,7 @@ pub mod bridge;
 pub mod vmt;
 pub mod head_bridge;
 pub mod mouse_look;
+pub mod controller_input;
 pub mod body;
 pub mod solver;
 pub mod filter;
@@ -477,6 +478,16 @@ impl TrackingEngine {
             // 360° (the webcam alone tops out near ±86°). Fused with the webcam
             // orientation below. Cursor stays free when the button isn't held.
             let mut mouse_look = crate::tracking::mouse_look::MouseLook::new();
+
+            // Controller input: mouse aims the laser + clicks, keyboard moves /
+            // opens menu, driving the two virtual VR controllers (UDP 39572) so
+            // the user can navigate VRChat's VR menus and walk around.
+            let controllers = crate::tracking::controller_input::ControllerInput::new().ok();
+            if controllers.is_some() {
+                println!("[Rust] Controller input ready -> vrcbridge hands (127.0.0.1:39572).");
+            } else {
+                println!("[Rust] Controller socket unavailable; menu navigation will not be sent.");
+            }
             
             let mut _last_log = std::time::Instant::now();
             while *running_logic.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -553,27 +564,38 @@ impl TrackingEngine {
                 // fixed at standing so the view can't sink to the floor. Mouse is
                 // polled every frame (cursor only captured while RMB is held).
                 let (mouse_yaw, mouse_pitch) = mouse_look.poll();
-                if let Some(head) = &head {
-                    let g = |key: &str| output.params.iter().find(|(k, _)| k == key).map(|(_, v)| *v);
-                    if let (Some(qx), Some(qy), Some(qz), Some(qw)) = (
+                let g = |key: &str| output.params.iter().find(|(k, _)| k == key).map(|(_, v)| *v);
+                // The fused head orientation (xyzw), shared by the HMD and the
+                // controller anchoring below. Falls back to identity when the
+                // webcam has no head quaternion this frame so mouse-look still
+                // works (and the hands stay anchored to the look direction).
+                let head_quat = {
+                    use nalgebra::{Quaternion, UnitQuaternion, Vector3};
+                    let q_cam = match (
                         g("SYS_HEAD_ROT_X"),
                         g("SYS_HEAD_ROT_Y"),
                         g("SYS_HEAD_ROT_Z"),
                         g("SYS_HEAD_ROT_W"),
                     ) {
-                        use nalgebra::{Quaternion, UnitQuaternion, Vector3};
-                        // nalgebra Quaternion is (w, i, j, k); our wire order is xyzw.
-                        let q_cam =
-                            UnitQuaternion::from_quaternion(Quaternion::new(qw, qx, qy, qz));
-                        let q_yaw =
-                            UnitQuaternion::from_axis_angle(&Vector3::y_axis(), mouse_yaw);
-                        let q_pitch =
-                            UnitQuaternion::from_axis_angle(&Vector3::x_axis(), mouse_pitch);
-                        let q_final = q_yaw * q_pitch * q_cam;
-                        let q = q_final.quaternion();
-                        if let Err(e) = head.send_rotation([q.i, q.j, q.k, q.w]) {
-                            eprintln!("[Rust] Head send error: {}", e);
+                        (Some(qx), Some(qy), Some(qz), Some(qw)) => {
+                            // nalgebra Quaternion is (w, i, j, k); wire order is xyzw.
+                            UnitQuaternion::from_quaternion(Quaternion::new(qw, qx, qy, qz))
                         }
+                        _ => UnitQuaternion::identity(),
+                    };
+                    let q_yaw = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), mouse_yaw);
+                    let q_pitch = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), mouse_pitch);
+                    let q = (q_yaw * q_pitch * q_cam).into_inner();
+                    [q.i, q.j, q.k, q.w]
+                };
+                if let Some(head) = &head {
+                    if let Err(e) = head.send_rotation(head_quat) {
+                        eprintln!("[Rust] Head send error: {}", e);
+                    }
+                }
+                if let Some(controllers) = &controllers {
+                    if let Err(e) = controllers.update(head_quat, mouse_look.rmb_held()) {
+                        eprintln!("[Rust] Controller send error: {}", e);
                     }
                 }
 

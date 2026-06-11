@@ -50,6 +50,37 @@ struct HeadPosePacket
 	float px, py, pz;
 };
 
+// UDP port for controller input from the Rust brain. The brain maps the mouse
+// (aim + click) and keyboard (movement / menu) onto these two virtual hands so
+// the user can navigate VRChat's VR menus and move — reproducing the desktop
+// controls through emulated VR controllers.
+static const unsigned short kControllerInputPort = 39572;
+
+// One packet per hand. Packed (no padding) so the Rust side can lay the bytes
+// out by hand and both ends agree on the 45-byte layout.
+#pragma pack( push, 1 )
+struct ControllerInputPacket
+{
+	uint8_t  hand;            // 0 = left, 1 = right
+	float    px, py, pz;      // position (metres, y up)
+	float    qx, qy, qz, qw;  // orientation (xyzw)
+	uint32_t buttons;         // bitfield (see ControllerButton)
+	float    trigger;         // analog trigger 0..1
+	float    thumbX, thumbY;  // thumbstick -1..1
+};
+#pragma pack( pop )
+
+// Button bits inside ControllerInputPacket::buttons. Must match the Rust sender.
+enum ControllerButton : uint32_t
+{
+	kBtnTrigger    = 1u << 0,
+	kBtnA          = 1u << 1,
+	kBtnB          = 1u << 2,
+	kBtnSystem     = 1u << 3,
+	kBtnThumbstick = 1u << 4,
+	kBtnGrip       = 1u << 5,
+};
+
 #if defined( _WIN32 )
 #define HMD_DLL_EXPORT extern "C" __declspec( dllexport )
 #else
@@ -291,6 +322,184 @@ private:
 };
 
 // ===========================================================================
+// A virtual hand controller. It MIMICS a Valve Index ("knuckles") controller:
+// by reporting ControllerType "knuckles" and pointing the input profile at
+// SteamVR's own bundled Index profile, VRChat auto-applies its existing knuckles
+// bindings — so trigger/thumbstick/menu work with NO custom binding JSON from
+// us. Pose + button/axis state are fed from the Rust brain over UDP (39572);
+// until the first packet arrives it sits at a resting pose so the laser shows.
+// ===========================================================================
+class CVrcBridgeController : public ITrackedDeviceServerDriver
+{
+public:
+	explicit CVrcBridgeController( ETrackedControllerRole role )
+		: m_role( role )
+	{
+		// Resting pose: hand slightly to the side, below eye level, identity rot.
+		m_pos[0] = ( role == TrackedControllerRole_LeftHand ) ? -0.2 : 0.2;
+		m_pos[1] = 1.1;
+		m_pos[2] = -0.3;
+	}
+
+	EVRInitError Activate( uint32_t unObjectId ) override
+	{
+		m_objectId = unObjectId;
+		m_propContainer = VRProperties()->TrackedDeviceToPropertyContainer( m_objectId );
+
+		VRProperties()->SetStringProperty( m_propContainer, Prop_TrackingSystemName_String, "vrcbridge" );
+		VRProperties()->SetStringProperty( m_propContainer, Prop_ManufacturerName_String, "Valve" );
+		VRProperties()->SetStringProperty( m_propContainer, Prop_ControllerType_String, "knuckles" );
+		VRProperties()->SetStringProperty( m_propContainer, Prop_InputProfilePath_String,
+			"{indexcontroller}/input/index_controller_profile.json" );
+		VRProperties()->SetInt32Property( m_propContainer, Prop_ControllerRoleHint_Int32, m_role );
+		VRProperties()->SetUint64Property( m_propContainer, Prop_CurrentUniverseId_Uint64, 2 );
+		VRProperties()->SetBoolProperty( m_propContainer, Prop_DeviceIsWireless_Bool, true );
+
+		if ( m_role == TrackedControllerRole_LeftHand )
+		{
+			VRProperties()->SetStringProperty( m_propContainer, Prop_ModelNumber_String, "Knuckles Left" );
+			VRProperties()->SetStringProperty( m_propContainer, Prop_RenderModelName_String, "{indexcontroller}valve_controller_knu_1_0_left" );
+			VRProperties()->SetStringProperty( m_propContainer, Prop_RegisteredDeviceType_String, "vrcbridge/controller_left" );
+		}
+		else
+		{
+			VRProperties()->SetStringProperty( m_propContainer, Prop_ModelNumber_String, "Knuckles Right" );
+			VRProperties()->SetStringProperty( m_propContainer, Prop_RenderModelName_String, "{indexcontroller}valve_controller_knu_1_0_right" );
+			VRProperties()->SetStringProperty( m_propContainer, Prop_RegisteredDeviceType_String, "vrcbridge/controller_right" );
+		}
+
+		auto *in = VRDriverInput();
+		in->CreateBooleanComponent( m_propContainer, "/input/system/click", &m_hSystemClick );
+		in->CreateBooleanComponent( m_propContainer, "/input/trigger/click", &m_hTriggerClick );
+		in->CreateScalarComponent( m_propContainer, "/input/trigger/value", &m_hTriggerValue, VRScalarType_Absolute, VRScalarUnits_NormalizedOneSided );
+		in->CreateBooleanComponent( m_propContainer, "/input/grip/click", &m_hGripClick );
+		in->CreateScalarComponent( m_propContainer, "/input/grip/value", &m_hGripValue, VRScalarType_Absolute, VRScalarUnits_NormalizedOneSided );
+		in->CreateScalarComponent( m_propContainer, "/input/grip/force", &m_hGripForce, VRScalarType_Absolute, VRScalarUnits_NormalizedOneSided );
+		in->CreateScalarComponent( m_propContainer, "/input/thumbstick/x", &m_hThumbX, VRScalarType_Absolute, VRScalarUnits_NormalizedTwoSided );
+		in->CreateScalarComponent( m_propContainer, "/input/thumbstick/y", &m_hThumbY, VRScalarType_Absolute, VRScalarUnits_NormalizedTwoSided );
+		in->CreateBooleanComponent( m_propContainer, "/input/thumbstick/click", &m_hThumbClick );
+		in->CreateBooleanComponent( m_propContainer, "/input/thumbstick/touch", &m_hThumbTouch );
+		in->CreateBooleanComponent( m_propContainer, "/input/a/click", &m_hAClick );
+		in->CreateBooleanComponent( m_propContainer, "/input/a/touch", &m_hATouch );
+		in->CreateBooleanComponent( m_propContainer, "/input/b/click", &m_hBClick );
+		in->CreateBooleanComponent( m_propContainer, "/input/b/touch", &m_hBTouch );
+		in->CreateScalarComponent( m_propContainer, "/input/trackpad/x", &m_hTrackpadX, VRScalarType_Absolute, VRScalarUnits_NormalizedTwoSided );
+		in->CreateScalarComponent( m_propContainer, "/input/trackpad/y", &m_hTrackpadY, VRScalarType_Absolute, VRScalarUnits_NormalizedTwoSided );
+		in->CreateBooleanComponent( m_propContainer, "/input/trackpad/touch", &m_hTrackpadTouch );
+		in->CreateScalarComponent( m_propContainer, "/input/finger/index", &m_hFingerIndex, VRScalarType_Absolute, VRScalarUnits_NormalizedOneSided );
+		in->CreateScalarComponent( m_propContainer, "/input/finger/middle", &m_hFingerMiddle, VRScalarType_Absolute, VRScalarUnits_NormalizedOneSided );
+		in->CreateScalarComponent( m_propContainer, "/input/finger/ring", &m_hFingerRing, VRScalarType_Absolute, VRScalarUnits_NormalizedOneSided );
+		in->CreateScalarComponent( m_propContainer, "/input/finger/pinky", &m_hFingerPinky, VRScalarType_Absolute, VRScalarUnits_NormalizedOneSided );
+		in->CreateHapticComponent( m_propContainer, "/output/haptic", &m_hHaptic );
+
+		return VRInitError_None;
+	}
+
+	void Deactivate() override { m_objectId = k_unTrackedDeviceIndexInvalid; }
+	void EnterStandby() override {}
+	void *GetComponent( const char * ) override { return nullptr; }
+	void DebugRequest( const char *, char *pchResponseBuffer, uint32_t unResponseBufferSize ) override
+	{
+		if ( unResponseBufferSize >= 1 )
+			pchResponseBuffer[0] = 0;
+	}
+
+	DriverPose_t GetPose() override
+	{
+		DriverPose_t pose = { 0 };
+		pose.poseIsValid = true;
+		pose.result = TrackingResult_Running_OK;
+		pose.deviceIsConnected = true;
+		pose.qWorldFromDriverRotation = { 1, 0, 0, 0 };
+		pose.qDriverFromHeadRotation = { 1, 0, 0, 0 };
+		std::lock_guard<std::mutex> lk( m_mutex );
+		pose.qRotation = m_rot;
+		pose.vecPosition[0] = m_pos[0];
+		pose.vecPosition[1] = m_pos[1];
+		pose.vecPosition[2] = m_pos[2];
+		return pose;
+	}
+
+	// Latch a freshly received input packet (called from the listener thread).
+	void ApplyPacket( const ControllerInputPacket &pkt )
+	{
+		std::lock_guard<std::mutex> lk( m_mutex );
+		m_rot = { pkt.qw, pkt.qx, pkt.qy, pkt.qz };
+		m_pos[0] = pkt.px;
+		m_pos[1] = pkt.py;
+		m_pos[2] = pkt.pz;
+		m_buttons = pkt.buttons;
+		m_trigger = pkt.trigger;
+		m_thumbX = pkt.thumbX;
+		m_thumbY = pkt.thumbY;
+	}
+
+	void RunFrame()
+	{
+		if ( m_objectId == k_unTrackedDeviceIndexInvalid )
+			return;
+		VRServerDriverHost()->TrackedDevicePoseUpdated( m_objectId, GetPose(), sizeof( DriverPose_t ) );
+
+		uint32_t buttons;
+		float trigger, thumbX, thumbY;
+		{
+			std::lock_guard<std::mutex> lk( m_mutex );
+			buttons = m_buttons;
+			trigger = m_trigger;
+			thumbX = m_thumbX;
+			thumbY = m_thumbY;
+		}
+
+		auto *in = VRDriverInput();
+		in->UpdateBooleanComponent( m_hTriggerClick, ( buttons & kBtnTrigger ) != 0, 0.0 );
+		in->UpdateScalarComponent( m_hTriggerValue, ( buttons & kBtnTrigger ) ? 1.0f : trigger, 0.0 );
+		in->UpdateBooleanComponent( m_hAClick, ( buttons & kBtnA ) != 0, 0.0 );
+		in->UpdateBooleanComponent( m_hBClick, ( buttons & kBtnB ) != 0, 0.0 );
+		in->UpdateBooleanComponent( m_hSystemClick, ( buttons & kBtnSystem ) != 0, 0.0 );
+		in->UpdateBooleanComponent( m_hThumbClick, ( buttons & kBtnThumbstick ) != 0, 0.0 );
+		in->UpdateBooleanComponent( m_hGripClick, ( buttons & kBtnGrip ) != 0, 0.0 );
+		in->UpdateScalarComponent( m_hGripValue, ( buttons & kBtnGrip ) ? 1.0f : 0.0f, 0.0 );
+		in->UpdateScalarComponent( m_hThumbX, thumbX, 0.0 );
+		in->UpdateScalarComponent( m_hThumbY, thumbY, 0.0 );
+		in->UpdateBooleanComponent( m_hThumbTouch, ( thumbX != 0.0f || thumbY != 0.0f ), 0.0 );
+	}
+
+private:
+	ETrackedControllerRole m_role;
+	uint32_t m_objectId = k_unTrackedDeviceIndexInvalid;
+	PropertyContainerHandle_t m_propContainer = k_ulInvalidPropertyContainer;
+
+	std::mutex m_mutex;
+	HmdQuaternion_t m_rot = { 1, 0, 0, 0 }; // { w, x, y, z }
+	double m_pos[3] = { 0.0, 1.1, -0.3 };
+	uint32_t m_buttons = 0;
+	float m_trigger = 0.f, m_thumbX = 0.f, m_thumbY = 0.f;
+
+	VRInputComponentHandle_t m_hSystemClick = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hTriggerClick = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hTriggerValue = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hGripClick = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hGripValue = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hGripForce = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hThumbX = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hThumbY = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hThumbClick = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hThumbTouch = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hAClick = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hATouch = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hBClick = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hBTouch = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hTrackpadX = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hTrackpadY = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hTrackpadTouch = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hFingerIndex = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hFingerMiddle = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hFingerRing = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hFingerPinky = k_ulInvalidInputComponentHandle;
+	VRInputComponentHandle_t m_hHaptic = k_ulInvalidInputComponentHandle;
+};
+
+// ===========================================================================
 // The server provider: SteamVR's entry point into the driver. Registers the
 // single virtual HMD and pumps its pose each frame.
 // ===========================================================================
@@ -303,13 +512,25 @@ public:
 
 		m_hmd = new CVrcBridgeHmd();
 		VRServerDriverHost()->TrackedDeviceAdded( "VRCBRIDGE_HMD_0", TrackedDeviceClass_HMD, m_hmd );
+
+		m_left = new CVrcBridgeController( TrackedControllerRole_LeftHand );
+		VRServerDriverHost()->TrackedDeviceAdded( "VRCBRIDGE_CTRL_L", TrackedDeviceClass_Controller, m_left );
+		m_right = new CVrcBridgeController( TrackedControllerRole_RightHand );
+		VRServerDriverHost()->TrackedDeviceAdded( "VRCBRIDGE_CTRL_R", TrackedDeviceClass_Controller, m_right );
+
+		StartControllerListener();
 		return VRInitError_None;
 	}
 
 	void Cleanup() override
 	{
+		StopControllerListener();
 		delete m_hmd;
 		m_hmd = nullptr;
+		delete m_left;
+		m_left = nullptr;
+		delete m_right;
+		m_right = nullptr;
 		VR_CLEANUP_SERVER_DRIVER_CONTEXT();
 	}
 
@@ -319,6 +540,10 @@ public:
 	{
 		if ( m_hmd )
 			m_hmd->RunFrame();
+		if ( m_left )
+			m_left->RunFrame();
+		if ( m_right )
+			m_right->RunFrame();
 	}
 
 	bool ShouldBlockStandbyMode() override { return false; }
@@ -326,7 +551,66 @@ public:
 	void LeaveStandby() override {}
 
 private:
+	// Background UDP listener for controller input from the Rust brain. One
+	// socket on 39572 receives per-hand packets and dispatches each to the
+	// matching controller by its hand byte.
+	void StartControllerListener()
+	{
+		if ( m_ctrlRunning.exchange( true ) )
+			return;
+
+		m_ctrlThread = std::thread( [this]() {
+			WSADATA wsa;
+			if ( WSAStartup( MAKEWORD( 2, 2 ), &wsa ) != 0 )
+				return;
+
+			SOCKET sock = socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
+			if ( sock == INVALID_SOCKET )
+			{
+				WSACleanup();
+				return;
+			}
+
+			sockaddr_in addr {};
+			addr.sin_family = AF_INET;
+			addr.sin_port = htons( kControllerInputPort );
+			inet_pton( AF_INET, "127.0.0.1", &addr.sin_addr );
+			bind( sock, reinterpret_cast<sockaddr *>( &addr ), sizeof( addr ) );
+
+			DWORD timeoutMs = 200;
+			setsockopt( sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char *>( &timeoutMs ), sizeof( timeoutMs ) );
+
+			ControllerInputPacket pkt;
+			while ( m_ctrlRunning )
+			{
+				int n = recv( sock, reinterpret_cast<char *>( &pkt ), sizeof( pkt ), 0 );
+				if ( n == static_cast<int>( sizeof( pkt ) ) )
+				{
+					if ( pkt.hand == 0 && m_left )
+						m_left->ApplyPacket( pkt );
+					else if ( pkt.hand == 1 && m_right )
+						m_right->ApplyPacket( pkt );
+				}
+			}
+
+			closesocket( sock );
+			WSACleanup();
+		} );
+	}
+
+	void StopControllerListener()
+	{
+		m_ctrlRunning = false;
+		if ( m_ctrlThread.joinable() )
+			m_ctrlThread.join();
+	}
+
 	CVrcBridgeHmd *m_hmd = nullptr;
+	CVrcBridgeController *m_left = nullptr;
+	CVrcBridgeController *m_right = nullptr;
+
+	std::atomic<bool> m_ctrlRunning { false };
+	std::thread m_ctrlThread;
 };
 
 // ---------------------------------------------------------------------------
