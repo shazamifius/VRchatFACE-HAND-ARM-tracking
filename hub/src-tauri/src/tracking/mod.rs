@@ -12,6 +12,7 @@ pub mod types;
 pub mod blaze;
 pub mod bridge;
 pub mod vmt;
+pub mod head_bridge;
 pub mod body;
 pub mod solver;
 pub mod filter;
@@ -459,6 +460,17 @@ impl TrackingEngine {
             } else {
                 println!("[Rust] VMT socket unavailable; body trackers will not be sent.");
             }
+
+            // Head output -> our own virtual HMD driver (vrcbridge) on UDP 39571.
+            // Streams the solver's smoothed head quaternion every frame so the
+            // VRChat view turns with the user's head. Continuous + filtered, so
+            // no teleport jumps (which SteamVR/VRChat read as tracking loss).
+            let head = crate::tracking::head_bridge::HeadBridge::new().ok();
+            if head.is_some() {
+                println!("[Rust] Head output ready -> vrcbridge HMD (127.0.0.1:39571).");
+            } else {
+                println!("[Rust] Head socket unavailable; HMD rotation will not be sent.");
+            }
             
             let mut _last_log = std::time::Instant::now();
             while *running_logic.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -523,6 +535,25 @@ impl TrackingEngine {
                     if !body.is_empty() {
                         if let Err(e) = vmt.send_trackers(&body) {
                             eprintln!("[Rust] VMT send error: {}", e);
+                        }
+                    }
+                }
+
+                // --- HEAD OUTPUT --- Forward the solver's smoothed head
+                // orientation (xyzw, already in the output params) to the
+                // virtual HMD. Rotation only; eye height stays fixed at standing
+                // so the view can't sink to the floor. Skipped silently when the
+                // quaternion isn't present (e.g. no face detected this frame).
+                if let Some(head) = &head {
+                    let g = |key: &str| output.params.iter().find(|(k, _)| k == key).map(|(_, v)| *v);
+                    if let (Some(qx), Some(qy), Some(qz), Some(qw)) = (
+                        g("SYS_HEAD_ROT_X"),
+                        g("SYS_HEAD_ROT_Y"),
+                        g("SYS_HEAD_ROT_Z"),
+                        g("SYS_HEAD_ROT_W"),
+                    ) {
+                        if let Err(e) = head.send_rotation([qx, qy, qz, qw]) {
+                            eprintln!("[Rust] Head send error: {}", e);
                         }
                     }
                 }
