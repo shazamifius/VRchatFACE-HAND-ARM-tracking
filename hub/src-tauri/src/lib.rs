@@ -242,21 +242,47 @@ pub fn run() {
             // the Rust -> VMT -> SteamVR transport in the SteamVR room view
             // BEFORE any body-pose AI is wired in. If the device shows up moving
             // in SteamVR, Phase 1's plumbing is proven. Harmless when unset.
-            if std::env::var("VMT_TEST").as_deref() == Ok("1") {
-                std::thread::spawn(|| match crate::tracking::vmt::VmtBridge::new() {
-                    Ok(vmt) => {
-                        println!("[VMT TEST] driving phantom tracker index 1 in a circle -> watch SteamVR (VMT driver must be installed)");
-                        let start = std::time::Instant::now();
-                        loop {
-                            let t = start.elapsed().as_secs_f32();
-                            if let Err(e) = vmt.send_test_circle(1, t, 0.3) {
-                                println!("[VMT TEST] send failed: {}", e);
+            // VMT_TEST=1 -> single phantom tracker in a circle (transport proof).
+            // VMT_TEST=2 -> a synthetic STANDING BODY swaying side to side, driven
+            //   through the REAL pose->tracker mapping, so hips/chest/feet show up
+            //   and move in SteamVR. This proves the whole body path (pose ->
+            //   body::pose_to_body_trackers -> VMT -> SteamVR) WITHOUT a camera.
+            match std::env::var("VMT_TEST").as_deref() {
+                Ok("1") => {
+                    std::thread::spawn(|| match crate::tracking::vmt::VmtBridge::new() {
+                        Ok(vmt) => {
+                            println!("[VMT TEST] driving phantom tracker index 1 in a circle -> watch SteamVR (VMT driver must be installed)");
+                            let start = std::time::Instant::now();
+                            loop {
+                                let t = start.elapsed().as_secs_f32();
+                                if let Err(e) = vmt.send_test_circle(1, t, 0.3) {
+                                    println!("[VMT TEST] send failed: {}", e);
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(16)); // ~60 Hz
                             }
-                            std::thread::sleep(std::time::Duration::from_millis(16)); // ~60 Hz
                         }
-                    }
-                    Err(e) => println!("[VMT TEST] could not open socket: {}", e),
-                });
+                        Err(e) => println!("[VMT TEST] could not open socket: {}", e),
+                    });
+                }
+                Ok("2") => {
+                    std::thread::spawn(|| match crate::tracking::vmt::VmtBridge::new() {
+                        Ok(vmt) => {
+                            println!("[VMT TEST] driving a SYNTHETIC standing body (hips/chest/feet) via the real pose->tracker mapping -> watch SteamVR for 4 trackers swaying");
+                            let start = std::time::Instant::now();
+                            loop {
+                                let t = start.elapsed().as_secs_f32();
+                                let pose = crate::tracking::body::synthetic_standing_pose(t);
+                                let body = crate::tracking::body::pose_to_body_trackers(&pose, 640.0, 480.0);
+                                if let Err(e) = vmt.send_trackers(&body) {
+                                    println!("[VMT TEST] send failed: {}", e);
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(16)); // ~60 Hz
+                            }
+                        }
+                        Err(e) => println!("[VMT TEST] could not open socket: {}", e),
+                    });
+                }
+                _ => {}
             }
 
             Ok(())

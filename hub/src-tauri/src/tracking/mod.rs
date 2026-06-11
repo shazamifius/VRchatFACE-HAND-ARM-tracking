@@ -12,6 +12,7 @@ pub mod types;
 pub mod blaze;
 pub mod bridge;
 pub mod vmt;
+pub mod body;
 pub mod solver;
 pub mod filter;
 pub mod terminal_monitor;
@@ -447,6 +448,17 @@ impl TrackingEngine {
         thread::spawn(move || {
             let mut solver = Solver::new();
             println!("[Rust] Logic thread started");
+
+            // VMT body-tracker output (SteamVR device emulation). Optional: if the
+            // socket can't open we just skip it — the rest of the engine (face
+            // params, VRChat OSC) is unaffected. When body pose is present we map
+            // it to hips/chest/feet trackers and push them to VMT every frame.
+            let vmt = crate::tracking::vmt::VmtBridge::new().ok();
+            if vmt.is_some() {
+                println!("[Rust] VMT body-tracker output ready (127.0.0.1:39570).");
+            } else {
+                println!("[Rust] VMT socket unavailable; body trackers will not be sent.");
+            }
             
             let mut _last_log = std::time::Instant::now();
             while *running_logic.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -500,6 +512,19 @@ impl TrackingEngine {
                 };
                 let output = solver.solve(&tracking_data, cam_w, cam_h);
                 let solve_ms = t_solve.elapsed().as_secs_f32() * 1000.0;
+
+                // --- VMT BODY OUTPUT --- Map the 33-pt body pose to SteamVR
+                // trackers (hips/chest/feet) and drive VMT. This is the full-body
+                // path: VRChat's IK animates the avatar's torso/legs from these
+                // real tracked devices — what OSC avatar params can't do.
+                if let (Some(vmt), Some(pose)) = (&vmt, &tracking_data.pose_landmarks) {
+                    let body = crate::tracking::body::pose_to_body_trackers(pose, cam_w, cam_h);
+                    if !body.is_empty() {
+                        if let Err(e) = vmt.send_trackers(&body) {
+                            eprintln!("[Rust] VMT send error: {}", e);
+                        }
+                    }
+                }
 
                 // [OSC OUT] 1 Hz dump of the ACTUAL values the engine emits, so the
                 // real output can be observed from logs (independent of VRChat/avatar).
