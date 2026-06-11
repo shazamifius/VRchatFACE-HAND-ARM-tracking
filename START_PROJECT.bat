@@ -81,7 +81,7 @@ if %ERRORLEVEL% NEQ 0 (
     echo [INFO] VMT/SteamVR not fully ready yet ^(see messages above^). The app
     echo        still runs; full-body needs SteamVR + VMT installed.
 )
-
+pause
 :MENU
 cls
 echo ========================================================

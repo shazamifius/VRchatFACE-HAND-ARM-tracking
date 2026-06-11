@@ -81,11 +81,19 @@ function Ensure-VmtFiles {
     }
 
     New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
-    Info "Fetching latest VMT release from GitHub..."
+    Info "Fetching VMT releases from GitHub..."
     $headers = @{ "User-Agent" = "vrchat-bridge-hub-setup" }
-    $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/gpsnmeajp/VirtualMotionTracker/releases/latest" -Headers $headers
-    $asset = $rel.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
-    if (-not $asset) { throw "No .zip asset found in latest VMT release." }
+    # VMT switched from a portable .zip to a GUI .exe installer at v0.14a. We want
+    # the portable build (no installer GUI, no elevation, we control the path), so
+    # scan releases newest-first and take the most recent one that ships a .zip.
+    # The OSC protocol (/VMT/Room/Unity) is identical across these versions.
+    $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/gpsnmeajp/VirtualMotionTracker/releases?per_page=30" -Headers $headers
+    $asset = $null
+    foreach ($r in $releases) {
+        $z = $r.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
+        if ($z) { $asset = $z; Info "Using portable VMT $($r.tag_name)"; break }
+    }
+    if (-not $asset) { throw "No portable .zip asset found in any recent VMT release." }
 
     $zipPath = Join-Path $ToolsDir $asset.name
     Info "Downloading $($asset.name) ..."

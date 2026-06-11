@@ -40,6 +40,9 @@ models/*.tflite
 # Cloudflared binary (downloaded automatically)
 scripts/cloudflared/*.exe
 
+# VMT driver (downloaded + extracted automatically by setup_vmt.ps1)
+hub/tools/
+
 # Logs
 *.log
 *.tmp
