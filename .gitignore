@@ -29,8 +29,9 @@ vcpkg_installed/
 *.exp
 *.lib
 
-# AI Models (too large, downloaded via script)
-models/*.onnx
+# AI Models (too large, downloaded via script). Pattern is unanchored so it also
+# covers hub/src-tauri/models/ (where the engine actually loads them from).
+*.onnx
 models/*.task
 models/*.tflite
 

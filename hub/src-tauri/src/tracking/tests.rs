@@ -556,14 +556,41 @@ mod tests {
         
         // 1. Test Dark Image
         let dark_img = ImageBuffer::from_pixel(128, 128, Rgb([5, 5, 5]));
-        let (_, _, _, brightness, diagnostic) = engine.run_inference(&dark_img).unwrap();
+        let (_, _, _, _, brightness, diagnostic) = engine.run_inference(&dark_img).unwrap();
         assert!(brightness < 10.0);
         assert!(diagnostic.unwrap().contains("Too Dark"));
 
         // 2. Test Bright Image
         let bright_img = ImageBuffer::from_pixel(128, 128, Rgb([250, 250, 250]));
-        let (_, _, _, brightness, diagnostic) = engine.run_inference(&bright_img).unwrap();
+        let (_, _, _, _, brightness, diagnostic) = engine.run_inference(&bright_img).unwrap();
         assert!(brightness > 240.0);
         assert!(diagnostic.unwrap().contains("Too Bright"));
+    }
+
+    // ===== TEST 12: Body Pose model loads + emits 33 landmarks =====
+    // Runtime proof that pose_landmark.onnx is wired correctly end-to-end:
+    // the generic BlazeLandmark auto-detects the 256x256 NHWC input, parses the
+    // [1,195] output as 39 pts, and run_inference returns the first 33 (the body).
+    // Gated on the model file being present so CI without models still passes.
+    #[test]
+    fn test_pose_model_loads_and_runs() {
+        use crate::tracking::ai::InferenceEngine;
+        use image::{ImageBuffer, Rgb};
+
+        let model = std::path::Path::new("models/pose_landmark.onnx");
+        if !model.exists() {
+            eprintln!("[test] models/pose_landmark.onnx absent — skipping pose runtime test");
+            return;
+        }
+
+        let mut engine = InferenceEngine::new();
+        engine.load_models("models").expect("load_models should not error");
+
+        // A mid-grey frame is enough to exercise the full inference path.
+        let img = ImageBuffer::from_pixel(640, 480, Rgb([120, 120, 120]));
+        let (_, _, _, pose, _, _) = engine.run_inference(&img).unwrap();
+
+        let pose = pose.expect("pose model should return landmarks (model is loaded)");
+        assert_eq!(pose.len(), 33, "BlazePose body must be exactly 33 points, got {}", pose.len());
     }
 }

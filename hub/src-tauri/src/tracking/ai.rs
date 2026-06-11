@@ -17,10 +17,16 @@ pub struct InferenceEngine {
     // Hand Models
     palm_detector: Option<BlazeDetector>,
     hand_landmark_model: Option<BlazeLandmark>,
+    // Body pose (BlazePose 33-pt). v1 runs the landmark model on a centered
+    // full-frame square and re-anchors the ROI from the landmarks each frame
+    // (same detect-then-track feedback the face uses), so we don't yet need the
+    // person detector. Phase 1.5 adds pose_detection.onnx for robustness.
+    pose_landmark_model: Option<BlazeLandmark>,
     // detect-then-track state
     frame_count: u64,
     face_roi: Option<(f32, f32, f32, f32)>,   // (xc, yc, scale, theta)
     hand_rois: Vec<(f32, f32, f32, f32)>,      // up to 2, from last palm detection
+    pose_roi: Option<(f32, f32, f32, f32)>,    // (xc, yc, scale, theta) from last pose
 }
 
 impl InferenceEngine {
@@ -30,10 +36,28 @@ impl InferenceEngine {
             landmark_model: None,
             palm_detector: None,
             hand_landmark_model: None,
+            pose_landmark_model: None,
             frame_count: 0,
             face_roi: None,
             hand_rois: Vec::new(),
+            pose_roi: None,
         }
+    }
+
+    /// Derive the next-frame pose ROI from the current body landmarks so the crop
+    /// follows the person between frames. Mirrors `face_roi_from_landmarks` but
+    /// with a larger margin (the body crop must comfortably contain limbs).
+    fn pose_roi_from_landmarks(landmarks: &[(f32, f32, f32)], prev: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+        if landmarks.is_empty() { return prev; }
+        let (mut minx, mut miny, mut maxx, mut maxy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for (x, y, _) in landmarks {
+            minx = minx.min(*x); maxx = maxx.max(*x);
+            miny = miny.min(*y); maxy = maxy.max(*y);
+        }
+        let xc = (minx + maxx) * 0.5;
+        let yc = (miny + maxy) * 0.5;
+        let size = (maxx - minx).max(maxy - miny) * 1.6; // generous margin for limbs
+        (xc, yc, size, 0.0)
     }
 
     /// Derive the next-frame face ROI from the current mesh landmarks so the crop
@@ -58,6 +82,8 @@ impl InferenceEngine {
         
         let palm_path = std::path::Path::new(models_dir).join("palm_detection.onnx");
         let hand_path = std::path::Path::new(models_dir).join("hand_landmark.onnx");
+
+        let pose_path = std::path::Path::new(models_dir).join("pose_landmark.onnx");
 
         // 1. Load Face Detector
         if face_path.exists() {
@@ -111,15 +137,31 @@ impl InferenceEngine {
             println!("[Rust] Warning: Hand Landmark model not found at {:?}", hand_path);
         }
 
+        // 5. Load Body Pose Landmark (BlazePose). Output 0 is [1,195] = 39 pts x 5
+        // (x,y,z,visibility,presence); we parse 39 and keep the first 33 (the body).
+        // Output 1 [1,1] is the pose-presence flag (used as the score). Input is
+        // 256x256 NHWC; BlazeLandmark auto-detects layout + size from the model.
+        if pose_path.exists() {
+            match BlazeLandmark::new(pose_path.to_str().unwrap(), 256, 39, 5) {
+                Ok(lm) => {
+                    self.pose_landmark_model = Some(lm);
+                    println!("[Rust] Body Pose BlazeLandmark loaded.");
+                },
+                Err(e) => println!("[Rust] Failed to load Pose Landmark: {}", e),
+            }
+        } else {
+            println!("[Rust] Warning: Pose Landmark model not found at {:?}", pose_path);
+        }
+
         Ok(())
     }
 
-    /// Run full pipeline: Face + Hands
-    /// Returns: (Face, LeftHand, RightHand, MeanBrightness, Diagnostic)
+    /// Run full pipeline: Face + Hands + Body Pose
+    /// Returns: (Face, LeftHand, RightHand, BodyPose(33), MeanBrightness, Diagnostic)
     pub fn run_inference(
-        &mut self, 
+        &mut self,
         image: &ImageBuffer<Rgb<u8>, Vec<u8>>
-    ) -> Result<(Option<Vec<[f32; 3]>>, Option<Vec<[f32; 3]>>, Option<Vec<[f32; 3]>>, f32, Option<String>)> {
+    ) -> Result<(Option<Vec<[f32; 3]>>, Option<Vec<[f32; 3]>>, Option<Vec<[f32; 3]>>, Option<Vec<[f32; 3]>>, f32, Option<String>)> {
         
         let dyn_img = image::DynamicImage::ImageRgb8(image.clone());
 
@@ -240,7 +282,35 @@ impl InferenceEngine {
             }
         }
 
+        // --- BODY POSE (BlazePose 33-pt, detect-then-track via landmark feedback) ---
+        // v1: no person detector. On the refresh tick (or when lost) we re-anchor
+        // the crop to the whole frame (a square covering the larger dimension);
+        // between ticks we reuse the ROI derived from the previous frame's body
+        // landmarks. Same pattern as the face path. The pose-presence flag is NOT
+        // thresholded yet (its scale is model-specific — gating blindly is exactly
+        // what once dropped every face), so we accept any non-empty result and will
+        // calibrate a real gate from observed scores.
+        let mut pose_landmarks = None;
+        if let Some(pose_model) = &mut self.pose_landmark_model {
+            let (w, h) = (dyn_img.width() as f32, dyn_img.height() as f32);
+            let need_pose_redetect = self.pose_roi.is_none() || self.frame_count % REDETECT_INTERVAL == 0;
+            let (xc, yc, scale, theta) = if need_pose_redetect {
+                (w * 0.5, h * 0.5, w.max(h), 0.0)
+            } else {
+                self.pose_roi.unwrap()
+            };
+            match pose_model.predict(&dyn_img, xc, yc, scale, theta) {
+                Ok((landmarks, _score, _)) if !landmarks.is_empty() => {
+                    // Keep the first 33 (body); points 34-39 are auxiliary refinement.
+                    let body: Vec<(f32, f32, f32)> = landmarks.into_iter().take(33).collect();
+                    self.pose_roi = Some(Self::pose_roi_from_landmarks(&body, (xc, yc, scale, theta)));
+                    pose_landmarks = Some(body.iter().map(|p| [p.0, p.1, p.2]).collect());
+                }
+                _ => { self.pose_roi = None; }
+            }
+        }
+
         self.frame_count = self.frame_count.wrapping_add(1);
-        Ok((face_landmarks, left_hand, right_hand, mean, diagnostic))
+        Ok((face_landmarks, left_hand, right_hand, pose_landmarks, mean, diagnostic))
     }
 }

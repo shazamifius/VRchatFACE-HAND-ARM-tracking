@@ -342,12 +342,12 @@ impl TrackingEngine {
                             ai_guard.run_inference(&image_arc)
                         }));
 
-                        let (face, left, right, brightness, diagnostic) = match inference_result {
+                        let (face, left, right, pose, brightness, diagnostic) = match inference_result {
                             Ok(Ok(res)) => res,
                             Ok(Err(e)) => {
                                 // [DIAG] Surface the real inference error to the console.
                                 println!("[AI ERROR] run_inference failed: {:#}", e);
-                                (None, None, None, 0.0, Some(format!("AI Error: {}", e)))
+                                (None, None, None, None, 0.0, Some(format!("AI Error: {}", e)))
                             }
                             Err(panic) => {
                                 let msg = panic
@@ -356,14 +356,15 @@ impl TrackingEngine {
                                     .or_else(|| panic.downcast_ref::<String>().cloned())
                                     .unwrap_or_else(|| "unknown panic".to_string());
                                 println!("[AI PANIC] inference panicked (frame skipped): {}", msg);
-                                (None, None, None, 0.0, Some("AI Panic (recovered)".to_string()))
+                                (None, None, None, None, 0.0, Some("AI Panic (recovered)".to_string()))
                             }
                         };
-                        
+
                         // BUG-08 FIX: Track what was actually detected this frame
                         let has_face = face.is_some();
                         let has_left = left.is_some();
                         let has_right = right.is_some();
+                        let has_pose = pose.is_some();
 
                         // Write to Data (Solver will pick it up)
                         let mut data_for_emit = None;
@@ -371,6 +372,7 @@ impl TrackingEngine {
                              d.face_landmarks = face;
                              d.left_hand_landmarks = left;
                              d.right_hand_landmarks = right;
+                             d.pose_landmarks = pose;
                              // Stamp the exact resolution the landmarks live in,
                              // so the solver scales against the right dimensions.
                              d.frame_w = image_arc.width() as f32;
@@ -408,11 +410,12 @@ impl TrackingEngine {
                             }
                             // Concise 1 Hz health summary (replaces the per-frame spam).
                             println!(
-                                "[Status] {:>4.1} fps | face:{} Lhand:{} Rhand:{} | brightness:{:.0}",
+                                "[Status] {:>4.1} fps | face:{} Lhand:{} Rhand:{} body:{} | brightness:{:.0}",
                                 fps,
                                 if has_face { "ON " } else { "off" },
                                 if has_left { "ON " } else { "off" },
                                 if has_right { "ON " } else { "off" },
+                                if has_pose { "ON " } else { "off" },
                                 brightness
                             );
                             frame_count = 0;
