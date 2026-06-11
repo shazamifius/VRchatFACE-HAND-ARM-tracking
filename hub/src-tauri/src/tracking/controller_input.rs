@@ -143,12 +143,14 @@ impl ControllerInput {
             right_buttons |= BTN_A; // jump
         }
 
-        // Hands sit just in front of the head and point along the gaze, so the
-        // right-hand laser acts as a center reticle: look at a target (mouse
-        // turns the head), then left click to select.
+        // Hands at realistic human proportions in front of the body: shoulder
+        // width apart (~0.4 m) and well below the head (~chest/waist). VRChat's
+        // VR avatar scaling can size you from the head<->hands span, and hands
+        // bunched up at the head made the avatar tiny (~10 cm). They still point
+        // along the gaze so the right-hand laser stays a center reticle.
         let head_pos = Vector3::new(0.0, Self::HEAD_Y, 0.0);
-        let right_pos = head_pos + q_head * Vector3::new(0.12, -0.12, -0.15);
-        let left_pos = head_pos + q_head * Vector3::new(-0.12, -0.12, -0.15);
+        let right_pos = head_pos + q_head * Vector3::new(0.20, -0.45, -0.35);
+        let left_pos = head_pos + q_head * Vector3::new(-0.20, -0.45, -0.35);
 
         let q_right = q_head;
         let q_left = q_head;
