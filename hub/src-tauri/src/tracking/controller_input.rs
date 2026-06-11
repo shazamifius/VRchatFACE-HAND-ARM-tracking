@@ -44,20 +44,36 @@ mod sys {
         pub fn GetAsyncKeyState(v_key: i32) -> i16;
         pub fn GetCursorPos(point: *mut POINT) -> i32;
         pub fn GetSystemMetrics(index: i32) -> i32;
+        pub fn MapVirtualKeyW(u_code: u32, u_map_type: u32) -> u32;
     }
 
     pub const VK_LBUTTON: i32 = 0x01;
     pub const VK_TAB: i32 = 0x09;
     pub const VK_SPACE: i32 = 0x20;
-    pub const VK_W: i32 = 0x57;
-    pub const VK_A: i32 = 0x41;
-    pub const VK_S: i32 = 0x53;
-    pub const VK_D: i32 = 0x44;
     pub const SM_CXSCREEN: i32 = 0;
     pub const SM_CYSCREEN: i32 = 1;
 
+    // Physical scancodes (Set 1) for the WASD movement cluster. We resolve them
+    // to virtual keys via the ACTIVE layout, so the same physical keys work on
+    // AZERTY (ZQSD), QWERTZ, etc. — not just QWERTY.
+    pub const SC_W: u32 = 0x11; // forward  (AZERTY: Z)
+    pub const SC_A: u32 = 0x1E; // left     (AZERTY: Q)
+    pub const SC_S: u32 = 0x1F; // back     (AZERTY: S)
+    pub const SC_D: u32 = 0x20; // right    (AZERTY: D)
+    const MAPVK_VSC_TO_VK: u32 = 1;
+
     pub unsafe fn key_down(vk: i32) -> bool {
         (GetAsyncKeyState(vk) as u16 & 0x8000) != 0
+    }
+
+    /// Is the physical key at `scancode` (a Set-1 scancode) currently down,
+    /// regardless of keyboard layout?
+    pub unsafe fn key_down_sc(scancode: u32) -> bool {
+        let vk = MapVirtualKeyW(scancode, MAPVK_VSC_TO_VK);
+        if vk == 0 {
+            return false;
+        }
+        (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0
     }
 }
 
@@ -116,7 +132,9 @@ impl ControllerInput {
                 if sys::GetCursorPos(&mut p) != 0 {
                     let nx = (p.x as f32 / sw) * 2.0 - 1.0; // [-1,1], left->right
                     let ny = (p.y as f32 / sh) * 2.0 - 1.0; // [-1,1], top->bottom
-                    (-nx * Self::AIM_YAW_RANGE, ny * Self::AIM_PITCH_RANGE)
+                    // Signs chosen so the laser follows the cursor 1:1 (right ->
+                    // right, up -> up) — corrects the inverted aim the user saw.
+                    (nx * Self::AIM_YAW_RANGE, -ny * Self::AIM_PITCH_RANGE)
                 } else {
                     (0.0, 0.0)
                 }
@@ -132,16 +150,17 @@ impl ControllerInput {
             let space = sys::key_down(sys::VK_SPACE);
             let mut tx = 0.0f32;
             let mut ty = 0.0f32;
-            if sys::key_down(sys::VK_A) {
+            // Physical WASD cluster (AZERTY users get ZQSD automatically).
+            if sys::key_down_sc(sys::SC_A) {
                 tx -= 1.0;
             }
-            if sys::key_down(sys::VK_D) {
+            if sys::key_down_sc(sys::SC_D) {
                 tx += 1.0;
             }
-            if sys::key_down(sys::VK_W) {
+            if sys::key_down_sc(sys::SC_W) {
                 ty += 1.0;
             }
-            if sys::key_down(sys::VK_S) {
+            if sys::key_down_sc(sys::SC_S) {
                 ty -= 1.0;
             }
             (lmb, tab, space, tx, ty)
