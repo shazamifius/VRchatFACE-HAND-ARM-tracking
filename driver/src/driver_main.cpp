@@ -232,9 +232,14 @@ public:
 
 	void GetRecommendedRenderTargetSize( uint32_t *pnWidth, uint32_t *pnHeight ) override
 	{
-		// Render the full window (mono) so the flat image is crisp at native res.
-		*pnWidth = m_winW;
-		*pnHeight = m_winH;
+		// Keep the per-eye render target MODEST and matched to the window aspect.
+		// Rendering at full monitor res x2 eyes crushed VRChat's FPS, so the
+		// compositor reprojected and revealed black borders at the edges when
+		// turning. The compositor upscales this to the full-screen window.
+		const uint32_t kRenderH = 900;
+		float aspect = ( m_winH > 0 ) ? ( static_cast<float>( m_winW ) / static_cast<float>( m_winH ) ) : 1.6f;
+		*pnHeight = kRenderH;
+		*pnWidth = static_cast<uint32_t>( kRenderH * aspect );
 	}
 
 	void GetEyeOutputViewport( EVREye eEye, uint32_t *pnX, uint32_t *pnY, uint32_t *pnWidth, uint32_t *pnHeight ) override

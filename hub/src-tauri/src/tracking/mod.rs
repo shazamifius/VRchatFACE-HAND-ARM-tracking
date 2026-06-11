@@ -452,16 +452,22 @@ impl TrackingEngine {
             let mut solver = Solver::new();
             println!("[Rust] Logic thread started");
 
-            // VMT body-tracker output (SteamVR device emulation). Optional: if the
-            // socket can't open we just skip it — the rest of the engine (face
-            // params, VRChat OSC) is unaffected. When body pose is present we map
-            // it to hips/chest/feet trackers and push them to VMT every frame.
-            let vmt = crate::tracking::vmt::VmtBridge::new().ok();
-            if vmt.is_some() {
-                println!("[Rust] VMT body-tracker output ready (127.0.0.1:39570).");
+            // VMT body-tracker output (SteamVR device emulation). DISABLED by
+            // default: webcam body pose is currently unreliable, and feeding bad
+            // hip/chest tracker poses makes VRChat's full-body IK contort the
+            // avatar — wrong "gravity", walking on walls, and the head failing to
+            // turn in-world. Until body tracking is calibrated+reliable we run
+            // head + 2 controllers only (stable 3-point). Opt in with VMT_BODY=1.
+            let vmt = if std::env::var("VMT_BODY").as_deref() == Ok("1") {
+                let v = crate::tracking::vmt::VmtBridge::new().ok();
+                if v.is_some() {
+                    println!("[Rust] VMT body-tracker output ENABLED (VMT_BODY=1, 127.0.0.1:39570).");
+                }
+                v
             } else {
-                println!("[Rust] VMT socket unavailable; body trackers will not be sent.");
-            }
+                println!("[Rust] VMT body trackers OFF (set VMT_BODY=1 to enable). Head+controllers only.");
+                None
+            };
 
             // Head output -> our own virtual HMD driver (vrcbridge) on UDP 39571.
             // Streams the solver's smoothed head quaternion every frame so the
