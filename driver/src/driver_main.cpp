@@ -34,6 +34,14 @@
 #include <ws2tcpip.h>
 #pragma comment( lib, "ws2_32.lib" )
 
+// We need the primary monitor resolution to make the headset window fill the
+// whole screen (a true flat full-screen view). Declared directly to avoid
+// pulling in all of <windows.h> after winsock.
+extern "C" __declspec( dllimport ) int __stdcall GetSystemMetrics( int nIndex );
+#pragma comment( lib, "user32.lib" )
+#define VRCB_SM_CXSCREEN 0
+#define VRCB_SM_CYSCREEN 1
+
 using namespace vr;
 
 // UDP port the driver listens on for head orientation/position from the Rust
@@ -89,18 +97,19 @@ enum ControllerButton : uint32_t
 
 // ---------------------------------------------------------------------------
 // Display geometry. Windowed-on-desktop "headset": the compositor renders into
-// a kWindowWidth x kWindowHeight region at (kWindowX, kWindowY) on the monitor,
-// split left/right into two eye viewports. kRender* is the per-eye render
-// target SteamVR asks the app to draw.
+// a window region at (0,0). The window is sized to the primary monitor at
+// runtime (see CVrcBridgeHmd::Activate) so it fills the whole screen, and both
+// eyes are collapsed to the full window (mono) for a flat, non-stereo view.
 // ---------------------------------------------------------------------------
 static const int32_t  kWindowX = 0;
 static const int32_t  kWindowY = 0;
-static const uint32_t kWindowWidth = 1920;
-static const uint32_t kWindowHeight = 1080;
-static const uint32_t kRenderWidth = 960;  // per eye
-static const uint32_t kRenderHeight = 1080;
+static const uint32_t kWindowWidthFallback = 1920;
+static const uint32_t kWindowHeightFallback = 1080;
 static const float    kDisplayFrequency = 90.0f;
 static const float    kIpdMeters = 0.063f;
+// Vertical FOV as a tangent half-angle (~73° vfov). Horizontal is derived from
+// the window aspect so the flat image isn't stretched.
+static const float    kTanHalfVFov = 0.75f;
 
 // ===========================================================================
 // The virtual HMD device. Implements both the tracked-device interface and the
@@ -121,6 +130,13 @@ public:
 	{
 		m_objectId = unObjectId;
 		m_propContainer = VRProperties()->TrackedDeviceToPropertyContainer( m_objectId );
+
+		// Size the headset window to the primary monitor so the flat view fills
+		// the whole screen. Fall back to 1080p if the query fails.
+		int sw = GetSystemMetrics( VRCB_SM_CXSCREEN );
+		int sh = GetSystemMetrics( VRCB_SM_CYSCREEN );
+		m_winW = ( sw > 0 ) ? static_cast<uint32_t>( sw ) : kWindowWidthFallback;
+		m_winH = ( sh > 0 ) ? static_cast<uint32_t>( sh ) : kWindowHeightFallback;
 
 		VRProperties()->SetStringProperty( m_propContainer, Prop_ModelNumber_String, "VRCBridge Virtual HMD" );
 		VRProperties()->SetStringProperty( m_propContainer, Prop_RenderModelName_String, "generic_hmd" );
@@ -205,8 +221,8 @@ public:
 	{
 		*pnX = kWindowX;
 		*pnY = kWindowY;
-		*pnWidth = kWindowWidth;
-		*pnHeight = kWindowHeight;
+		*pnWidth = m_winW;
+		*pnHeight = m_winH;
 	}
 
 	// true => SteamVR composites into the desktop window above (so the user
@@ -216,8 +232,9 @@ public:
 
 	void GetRecommendedRenderTargetSize( uint32_t *pnWidth, uint32_t *pnHeight ) override
 	{
-		*pnWidth = kRenderWidth;
-		*pnHeight = kRenderHeight;
+		// Render the full window (mono) so the flat image is crisp at native res.
+		*pnWidth = m_winW;
+		*pnHeight = m_winH;
 	}
 
 	void GetEyeOutputViewport( EVREye eEye, uint32_t *pnX, uint32_t *pnY, uint32_t *pnWidth, uint32_t *pnHeight ) override
@@ -230,17 +247,21 @@ public:
 		(void)eEye;
 		*pnX = 0;
 		*pnY = 0;
-		*pnWidth = kWindowWidth;
-		*pnHeight = kWindowHeight;
+		*pnWidth = m_winW;
+		*pnHeight = m_winH;
 	}
 
 	void GetProjectionRaw( EVREye, float *pfLeft, float *pfRight, float *pfTop, float *pfBottom ) override
 	{
-		// Symmetric ~90 deg FOV (tangent half-angles).
-		*pfLeft = -1.0f;
-		*pfRight = 1.0f;
-		*pfTop = -1.0f;
-		*pfBottom = 1.0f;
+		// Aspect-correct symmetric FOV (tangent half-angles). Vertical is fixed;
+		// horizontal scales with the window aspect so the flat view isn't
+		// stretched on wide/tall monitors.
+		float aspect = ( m_winH > 0 ) ? ( static_cast<float>( m_winW ) / static_cast<float>( m_winH ) ) : 1.0f;
+		float tanH = kTanHalfVFov * aspect;
+		*pfLeft = -tanH;
+		*pfRight = tanH;
+		*pfTop = -kTanHalfVFov;
+		*pfBottom = kTanHalfVFov;
 	}
 
 	DistortionCoordinates_t ComputeDistortion( EVREye, float fU, float fV ) override
@@ -318,6 +339,9 @@ private:
 	uint32_t m_objectId;
 	PropertyContainerHandle_t m_propContainer;
 	VRInputComponentHandle_t m_proximity = k_ulInvalidInputComponentHandle;
+
+	uint32_t m_winW = kWindowWidthFallback;
+	uint32_t m_winH = kWindowHeightFallback;
 
 	std::mutex m_poseMutex;
 	HmdQuaternion_t m_orientation = { 1, 0, 0, 0 }; // { w, x, y, z }

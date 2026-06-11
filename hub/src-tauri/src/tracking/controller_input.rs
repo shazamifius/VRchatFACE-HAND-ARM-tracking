@@ -16,7 +16,7 @@
 //! matching `ControllerInputPacket` in driver/src/driver_main.cpp.
 
 use anyhow::Result;
-use nalgebra::{Quaternion, UnitQuaternion, Vector3};
+use nalgebra::{UnitQuaternion, Vector3};
 use std::net::UdpSocket;
 
 // Button bits — must match `enum ControllerButton` in the C++ driver.
@@ -113,15 +113,8 @@ impl ControllerInput {
     /// wherever the user is looking. `rmb_held` suppresses laser re-aim while the
     /// user is head-looking (the cursor is captured then).
     #[cfg(windows)]
-    pub fn update(&self, head_quat_xyzw: [f32; 4], rmb_held: bool) -> Result<()> {
-        let q_head = UnitQuaternion::from_quaternion(Quaternion::new(
-            head_quat_xyzw[3],
-            head_quat_xyzw[0],
-            head_quat_xyzw[1],
-            head_quat_xyzw[2],
-        ));
-
-        // --- Mouse aim -> laser offset from head orientation ---
+    pub fn update(&self, _head_quat_xyzw: [f32; 4], rmb_held: bool) -> Result<()> {
+        // --- Mouse aim -> laser direction in a fixed world frame ---
         let (aim_yaw, aim_pitch) = if rmb_held {
             (0.0, 0.0) // head-look mode: keep laser pointing straight ahead
         } else {
@@ -177,16 +170,15 @@ impl ControllerInput {
             right_buttons |= BTN_A; // jump
         }
 
-        // Hand world poses: a fixed local offset rotated into the head frame so
-        // the hands sit in front of the user and turn with the view.
-        let right_local = Vector3::new(0.2, -0.3, -0.3);
-        let left_local = Vector3::new(-0.2, -0.3, -0.3);
-        let head_pos = Vector3::new(0.0, Self::HEAD_Y, 0.0);
-        let right_pos = head_pos + q_head * right_local;
-        let left_pos = head_pos + q_head * left_local;
+        // Hand world poses in a FIXED frame (NOT composed with the webcam head
+        // orientation). Composing with the tumbling webcam head was what made
+        // the laser axes feel scrambled ("right is up, up is left"); a stable
+        // world frame makes the mouse->laser mapping fully predictable.
+        let right_pos = Vector3::new(0.2, Self::HEAD_Y - 0.3, -0.3);
+        let left_pos = Vector3::new(-0.2, Self::HEAD_Y - 0.3, -0.3);
 
-        let q_right = q_head * q_aim;
-        let q_left = q_head;
+        let q_right = q_aim;
+        let q_left = UnitQuaternion::identity();
 
         let right = HandState {
             hand: 1,
