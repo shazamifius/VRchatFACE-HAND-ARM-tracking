@@ -22,6 +22,8 @@
 // does NOT link against openvr_api. This is why it can live as a tiny C++ DLL
 // bundled inside our otherwise-Rust app.
 
+#define _USE_MATH_DEFINES
+
 #include "openvr_driver.h"
 
 #include <cstring>
@@ -29,6 +31,8 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <chrono>
+#include <cmath>
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -43,6 +47,17 @@ extern "C" __declspec( dllimport ) int __stdcall GetSystemMetrics( int nIndex );
 #define VRCB_SM_CYSCREEN 1
 
 using namespace vr;
+
+// Hamilton product of two quaternions stored as { w, x, y, z }.
+static HmdQuaternion_t QuatMul( const HmdQuaternion_t &a, const HmdQuaternion_t &b )
+{
+	HmdQuaternion_t r;
+	r.w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z;
+	r.x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y;
+	r.y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x;
+	r.z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w;
+	return r;
+}
 
 // UDP port the driver listens on for head orientation/position from the Rust
 // "brain". The brain fuses webcam head tracking + mouse-look + (later) keyboard
@@ -199,6 +214,13 @@ public:
 			pose.vecPosition[0] = m_position[0];
 			pose.vecPosition[1] = m_position[1];
 			pose.vecPosition[2] = m_position[2];
+			// Report angular velocity (rad/s, world frame). VRChat uses it
+			// in-world to apply/predict head rotation and the compositor uses it
+			// for reprojection; without it the in-world head can feel frozen and
+			// turning reveals black borders at the edges.
+			pose.vecAngularVelocity[0] = m_angularVelocity[0];
+			pose.vecAngularVelocity[1] = m_angularVelocity[1];
+			pose.vecAngularVelocity[2] = m_angularVelocity[2];
 		}
 
 		return pose;
@@ -209,10 +231,51 @@ public:
 	{
 		if ( m_objectId == k_unTrackedDeviceIndexInvalid )
 			return;
+		ComputeAngularVelocity();
 		VRServerDriverHost()->TrackedDevicePoseUpdated( m_objectId, GetPose(), sizeof( DriverPose_t ) );
 		// Keep asserting "worn" so SteamVR never enters standby.
 		if ( m_proximity != k_ulInvalidInputComponentHandle )
 			VRDriverInput()->UpdateBooleanComponent( m_proximity, true, 0.0 );
+	}
+
+	// Estimate angular velocity from the orientation change since the last frame
+	// so the reported pose carries a sensible vecAngularVelocity.
+	void ComputeAngularVelocity()
+	{
+		HmdQuaternion_t cur;
+		{
+			std::lock_guard<std::mutex> lk( m_poseMutex );
+			cur = m_orientation;
+		}
+		auto now = std::chrono::steady_clock::now();
+		double dt = std::chrono::duration<double>( now - m_prevTime ).count();
+		if ( m_havePrev && dt > 1e-4 )
+		{
+			// q_delta = cur * inverse(prev) (unit quats: inverse = conjugate).
+			HmdQuaternion_t inv = { m_prevOrientation.w, -m_prevOrientation.x, -m_prevOrientation.y, -m_prevOrientation.z };
+			HmdQuaternion_t d = QuatMul( cur, inv );
+			double w = d.w;
+			if ( w > 1.0 ) w = 1.0;
+			if ( w < -1.0 ) w = -1.0;
+			double angle = 2.0 * std::acos( w );
+			if ( angle > M_PI ) angle -= 2.0 * M_PI; // shortest arc
+			double s = std::sqrt( 1.0 - w * w );
+			double ax = 0.0, ay = 0.0, az = 0.0;
+			if ( s > 1e-6 )
+			{
+				ax = d.x / s;
+				ay = d.y / s;
+				az = d.z / s;
+			}
+			double omega = angle / dt;
+			std::lock_guard<std::mutex> lk( m_poseMutex );
+			m_angularVelocity[0] = ax * omega;
+			m_angularVelocity[1] = ay * omega;
+			m_angularVelocity[2] = az * omega;
+		}
+		m_prevOrientation = cur;
+		m_prevTime = now;
+		m_havePrev = true;
 	}
 
 	// ---- IVRDisplayComponent ----
@@ -351,6 +414,12 @@ private:
 	std::mutex m_poseMutex;
 	HmdQuaternion_t m_orientation = { 1, 0, 0, 0 }; // { w, x, y, z }
 	double m_position[3] = { 0.0, 1.6, 0.0 };       // metres, y up
+	double m_angularVelocity[3] = { 0.0, 0.0, 0.0 };// rad/s, world frame
+
+	// Previous-frame state for angular velocity estimation.
+	HmdQuaternion_t m_prevOrientation = { 1, 0, 0, 0 };
+	std::chrono::steady_clock::time_point m_prevTime = std::chrono::steady_clock::now();
+	bool m_havePrev = false;
 
 	std::atomic<bool> m_netRunning { false };
 	std::thread m_netThread;
