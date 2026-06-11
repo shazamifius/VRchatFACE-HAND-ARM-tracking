@@ -13,6 +13,7 @@ pub mod blaze;
 pub mod bridge;
 pub mod vmt;
 pub mod head_bridge;
+pub mod mouse_look;
 pub mod body;
 pub mod solver;
 pub mod filter;
@@ -471,6 +472,11 @@ impl TrackingEngine {
             } else {
                 println!("[Rust] Head socket unavailable; HMD rotation will not be sent.");
             }
+
+            // Mouse-look: hold the RIGHT mouse button to turn the head a full
+            // 360° (the webcam alone tops out near ±86°). Fused with the webcam
+            // orientation below. Cursor stays free when the button isn't held.
+            let mut mouse_look = crate::tracking::mouse_look::MouseLook::new();
             
             let mut _last_log = std::time::Instant::now();
             while *running_logic.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -539,11 +545,14 @@ impl TrackingEngine {
                     }
                 }
 
-                // --- HEAD OUTPUT --- Forward the solver's smoothed head
-                // orientation (xyzw, already in the output params) to the
-                // virtual HMD. Rotation only; eye height stays fixed at standing
-                // so the view can't sink to the floor. Skipped silently when the
-                // quaternion isn't present (e.g. no face detected this frame).
+                // --- HEAD OUTPUT --- Fuse mouse-look with the webcam head
+                // orientation and forward it to the virtual HMD. Mouse-look adds
+                // yaw (world-up) + pitch (local-right) composed IN FRONT of the
+                // webcam quaternion, so the user gets a full 360° turn plus the
+                // webcam's natural head motion. Rotation only; eye height stays
+                // fixed at standing so the view can't sink to the floor. Mouse is
+                // polled every frame (cursor only captured while RMB is held).
+                let (mouse_yaw, mouse_pitch) = mouse_look.poll();
                 if let Some(head) = &head {
                     let g = |key: &str| output.params.iter().find(|(k, _)| k == key).map(|(_, v)| *v);
                     if let (Some(qx), Some(qy), Some(qz), Some(qw)) = (
@@ -552,7 +561,17 @@ impl TrackingEngine {
                         g("SYS_HEAD_ROT_Z"),
                         g("SYS_HEAD_ROT_W"),
                     ) {
-                        if let Err(e) = head.send_rotation([qx, qy, qz, qw]) {
+                        use nalgebra::{Quaternion, UnitQuaternion, Vector3};
+                        // nalgebra Quaternion is (w, i, j, k); our wire order is xyzw.
+                        let q_cam =
+                            UnitQuaternion::from_quaternion(Quaternion::new(qw, qx, qy, qz));
+                        let q_yaw =
+                            UnitQuaternion::from_axis_angle(&Vector3::y_axis(), mouse_yaw);
+                        let q_pitch =
+                            UnitQuaternion::from_axis_angle(&Vector3::x_axis(), mouse_pitch);
+                        let q_final = q_yaw * q_pitch * q_cam;
+                        let q = q_final.quaternion();
+                        if let Err(e) = head.send_rotation([q.i, q.j, q.k, q.w]) {
                             eprintln!("[Rust] Head send error: {}", e);
                         }
                     }
