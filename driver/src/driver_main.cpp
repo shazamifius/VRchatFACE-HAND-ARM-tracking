@@ -26,8 +26,29 @@
 
 #include <cstring>
 #include <cstdint>
+#include <atomic>
+#include <mutex>
+#include <thread>
+
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment( lib, "ws2_32.lib" )
 
 using namespace vr;
+
+// UDP port the driver listens on for head orientation/position from the Rust
+// "brain". The brain fuses webcam head tracking + mouse-look + (later) keyboard
+// and sends the final head pose here. Body trackers still go to VMT (39570);
+// this is the separate head channel our own driver owns.
+static const unsigned short kHeadPosePort = 39571;
+
+// Wire packet (little-endian floats): orientation as a quaternion (x,y,z,w) to
+// match the rest of the app's xyzw convention, then position in metres (y up).
+struct HeadPosePacket
+{
+	float qx, qy, qz, qw;
+	float px, py, pz;
+};
 
 #if defined( _WIN32 )
 #define HMD_DLL_EXPORT extern "C" __declspec( dllexport )
@@ -88,10 +109,15 @@ public:
 		VRDriverInput()->CreateBooleanComponent( m_propContainer, "/proximity", &m_proximity );
 		VRDriverInput()->UpdateBooleanComponent( m_proximity, true, 0.0 );
 
+		StartHeadListener();
 		return VRInitError_None;
 	}
 
-	void Deactivate() override { m_objectId = k_unTrackedDeviceIndexInvalid; }
+	void Deactivate() override
+	{
+		StopHeadListener();
+		m_objectId = k_unTrackedDeviceIndexInvalid;
+	}
 	void EnterStandby() override {}
 
 	void *GetComponent( const char *pchComponentNameAndVersion ) override
@@ -118,12 +144,15 @@ public:
 		pose.qWorldFromDriverRotation = { 1, 0, 0, 0 };
 		pose.qDriverFromHeadRotation = { 1, 0, 0, 0 };
 
-		// Static head at ~1.6 m eye height, looking forward. Head rotation will
-		// be driven from the Rust app in Milestone 1 by updating m_orientation.
-		pose.qRotation = m_orientation;
-		pose.vecPosition[0] = 0.0;
-		pose.vecPosition[1] = 1.6;
-		pose.vecPosition[2] = 0.0;
+		// Head pose comes from the Rust brain over UDP (webcam + mouse-look),
+		// defaulting to identity/eye-height until the first packet arrives.
+		{
+			std::lock_guard<std::mutex> lk( m_poseMutex );
+			pose.qRotation = m_orientation;
+			pose.vecPosition[0] = m_position[0];
+			pose.vecPosition[1] = m_position[1];
+			pose.vecPosition[2] = m_position[2];
+		}
 
 		return pose;
 	}
@@ -193,10 +222,72 @@ public:
 	}
 
 private:
+	// Background UDP listener: receives the fused head pose from the Rust brain
+	// and updates the shared orientation/position that GetPose reports.
+	void StartHeadListener()
+	{
+		if ( m_netRunning.exchange( true ) )
+			return; // already running
+
+		m_netThread = std::thread( [this]() {
+			WSADATA wsa;
+			if ( WSAStartup( MAKEWORD( 2, 2 ), &wsa ) != 0 )
+				return;
+
+			SOCKET sock = socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
+			if ( sock == INVALID_SOCKET )
+			{
+				WSACleanup();
+				return;
+			}
+
+			sockaddr_in addr {};
+			addr.sin_family = AF_INET;
+			addr.sin_port = htons( kHeadPosePort );
+			inet_pton( AF_INET, "127.0.0.1", &addr.sin_addr );
+			bind( sock, reinterpret_cast<sockaddr *>( &addr ), sizeof( addr ) );
+
+			// Recv timeout so the thread can notice m_netRunning going false.
+			DWORD timeoutMs = 200;
+			setsockopt( sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char *>( &timeoutMs ), sizeof( timeoutMs ) );
+
+			HeadPosePacket pkt;
+			while ( m_netRunning )
+			{
+				int n = recv( sock, reinterpret_cast<char *>( &pkt ), sizeof( pkt ), 0 );
+				if ( n == static_cast<int>( sizeof( pkt ) ) )
+				{
+					std::lock_guard<std::mutex> lk( m_poseMutex );
+					// HmdQuaternion_t is { w, x, y, z }; packet is x,y,z,w.
+					m_orientation = { pkt.qw, pkt.qx, pkt.qy, pkt.qz };
+					m_position[0] = pkt.px;
+					m_position[1] = pkt.py;
+					m_position[2] = pkt.pz;
+				}
+			}
+
+			closesocket( sock );
+			WSACleanup();
+		} );
+	}
+
+	void StopHeadListener()
+	{
+		m_netRunning = false;
+		if ( m_netThread.joinable() )
+			m_netThread.join();
+	}
+
 	uint32_t m_objectId;
 	PropertyContainerHandle_t m_propContainer;
 	VRInputComponentHandle_t m_proximity = k_ulInvalidInputComponentHandle;
-	HmdQuaternion_t m_orientation = { 1, 0, 0, 0 }; // updated by head tracking later
+
+	std::mutex m_poseMutex;
+	HmdQuaternion_t m_orientation = { 1, 0, 0, 0 }; // { w, x, y, z }
+	double m_position[3] = { 0.0, 1.6, 0.0 };       // metres, y up
+
+	std::atomic<bool> m_netRunning { false };
+	std::thread m_netThread;
 };
 
 // ===========================================================================

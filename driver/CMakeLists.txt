@@ -14,3 +14,8 @@ target_include_directories(driver_vrcbridge PRIVATE headers)
 
 # SteamVR looks for "driver_<name>.dll" — strip the default lib prefix.
 set_target_properties(driver_vrcbridge PROPERTIES PREFIX "")
+
+# Winsock for the UDP head-pose listener.
+if(WIN32)
+	target_link_libraries(driver_vrcbridge PRIVATE ws2_32)
+endif()
