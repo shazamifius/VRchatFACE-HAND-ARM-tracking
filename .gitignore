@@ -10,6 +10,9 @@ hub/src-tauri/target/
 vcpkg/
 vcpkg_installed/
 
+# CMake build output for the SteamVR driver (artifacts only; source is tracked)
+driver/build/
+
 # Visual Studio
 .vs/
 *.user
