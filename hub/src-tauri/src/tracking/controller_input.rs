@@ -143,17 +143,23 @@ impl ControllerInput {
             right_buttons |= BTN_A; // jump
         }
 
-        // Hands at realistic human proportions in front of the body: shoulder
-        // width apart (~0.4 m) and well below the head (~chest/waist). VRChat's
-        // VR avatar scaling can size you from the head<->hands span, and hands
-        // bunched up at the head made the avatar tiny (~10 cm). They still point
-        // along the gaze so the right-hand laser stays a center reticle.
+        // Anchor the hands by head YAW (heading) ONLY — not pitch/roll — so they
+        // stay stable in front of the body at chest/waist height instead of
+        // orbiting up/down and swinging to the face as you look around. The
+        // probe showed the hands rigidly tracking the full head orientation,
+        // which made VRChat's IK place them wrong ("wrong hands / inverted") and
+        // likely broke the avatar scale. Shoulder-width apart for human props.
+        // The RIGHT hand keeps the full gaze orientation so its laser still aims
+        // where you look (center reticle); the LEFT just faces forward.
+        let fwd = q_head * Vector3::new(0.0, 0.0, -1.0);
+        let yaw = (-fwd.x).atan2(-fwd.z);
+        let q_yaw = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), yaw);
         let head_pos = Vector3::new(0.0, Self::HEAD_Y, 0.0);
-        let right_pos = head_pos + q_head * Vector3::new(0.20, -0.45, -0.35);
-        let left_pos = head_pos + q_head * Vector3::new(-0.20, -0.45, -0.35);
+        let right_pos = head_pos + q_yaw * Vector3::new(0.20, -0.45, -0.35);
+        let left_pos = head_pos + q_yaw * Vector3::new(-0.20, -0.45, -0.35);
 
-        let q_right = q_head;
-        let q_left = q_head;
+        let q_right = q_head; // gaze -> laser aims where you look
+        let q_left = q_yaw;   // stable, faces forward
 
         let right = HandState {
             hand: 1,
