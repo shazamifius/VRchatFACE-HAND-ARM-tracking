@@ -12,6 +12,9 @@ vcpkg_installed/
 
 # CMake build output for the SteamVR driver (artifacts only; source is tracked)
 driver/build/
+# Diagnostic probe build output + generated report (source is tracked)
+diag/build/
+diag/report.txt
 
 # Visual Studio
 .vs/

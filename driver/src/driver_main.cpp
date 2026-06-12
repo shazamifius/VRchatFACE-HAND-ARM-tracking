@@ -33,6 +33,38 @@
 #include <thread>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstdarg>
+
+// Lightweight diagnostic logger. Writes to %TEMP%\vrcbridge_driver.log (truncated
+// when the driver loads), one line per call, flushed immediately so DIAGNOSE.ps1
+// can read it even while SteamVR is running. This is our window into what the
+// driver actually receives and emits — no more guessing.
+static void DriverLog( const char *fmt, ... )
+{
+	static FILE *f = nullptr;
+	static std::mutex logMutex;
+	std::lock_guard<std::mutex> lk( logMutex );
+	if ( !f )
+	{
+		const char *tmp = std::getenv( "TEMP" );
+		char path[512];
+		std::snprintf( path, sizeof( path ), "%s\\vrcbridge_driver.log", tmp ? tmp : "." );
+		f = std::fopen( path, "w" );
+		if ( !f )
+			return;
+	}
+	auto now = std::chrono::system_clock::now();
+	auto ms = std::chrono::duration_cast<std::chrono::milliseconds>( now.time_since_epoch() ).count() % 100000;
+	std::fprintf( f, "[%05lld] ", static_cast<long long>( ms ) );
+	va_list ap;
+	va_start( ap, fmt );
+	std::vfprintf( f, fmt, ap );
+	va_end( ap );
+	std::fputc( '\n', f );
+	std::fflush( f );
+}
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -152,6 +184,7 @@ public:
 		int sh = GetSystemMetrics( VRCB_SM_CYSCREEN );
 		m_winW = ( sw > 0 ) ? static_cast<uint32_t>( sw ) : kWindowWidthFallback;
 		m_winH = ( sh > 0 ) ? static_cast<uint32_t>( sh ) : kWindowHeightFallback;
+		DriverLog( "[HMD] Activate objId=%u window=%ux%u", unObjectId, m_winW, m_winH );
 
 		VRProperties()->SetStringProperty( m_propContainer, Prop_ModelNumber_String, "VRCBridge Virtual HMD" );
 		VRProperties()->SetStringProperty( m_propContainer, Prop_RenderModelName_String, "generic_hmd" );
@@ -372,25 +405,35 @@ private:
 			addr.sin_port = htons( kHeadPosePort );
 			inet_pton( AF_INET, "127.0.0.1", &addr.sin_addr );
 			bind( sock, reinterpret_cast<sockaddr *>( &addr ), sizeof( addr ) );
+			DriverLog( "[HMD] head listener bound to 127.0.0.1:%u", kHeadPosePort );
 
 			// Recv timeout so the thread can notice m_netRunning going false.
 			DWORD timeoutMs = 200;
 			setsockopt( sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char *>( &timeoutMs ), sizeof( timeoutMs ) );
 
 			HeadPosePacket pkt;
+			unsigned long long count = 0;
 			while ( m_netRunning )
 			{
 				int n = recv( sock, reinterpret_cast<char *>( &pkt ), sizeof( pkt ), 0 );
 				if ( n == static_cast<int>( sizeof( pkt ) ) )
 				{
-					std::lock_guard<std::mutex> lk( m_poseMutex );
-					// HmdQuaternion_t is { w, x, y, z }; packet is x,y,z,w.
-					m_orientation = { pkt.qw, pkt.qx, pkt.qy, pkt.qz };
-					m_position[0] = pkt.px;
-					m_position[1] = pkt.py;
-					m_position[2] = pkt.pz;
+					{
+						std::lock_guard<std::mutex> lk( m_poseMutex );
+						// HmdQuaternion_t is { w, x, y, z }; packet is x,y,z,w.
+						m_orientation = { pkt.qw, pkt.qx, pkt.qy, pkt.qz };
+						m_position[0] = pkt.px;
+						m_position[1] = pkt.py;
+						m_position[2] = pkt.pz;
+					}
+					// First packet, then a sample every ~90 packets (~1.5 s).
+					if ( count == 0 || ( count % 90 ) == 0 )
+						DriverLog( "[HMD] head pkt #%llu quat(xyzw)=[%+.3f %+.3f %+.3f %+.3f] pos=[%+.2f %+.2f %+.2f]",
+							count, pkt.qx, pkt.qy, pkt.qz, pkt.qw, pkt.px, pkt.py, pkt.pz );
+					count++;
 				}
 			}
+			DriverLog( "[HMD] head listener stopped after %llu packets", count );
 
 			closesocket( sock );
 			WSACleanup();
@@ -449,6 +492,8 @@ public:
 	{
 		m_objectId = unObjectId;
 		m_propContainer = VRProperties()->TrackedDeviceToPropertyContainer( m_objectId );
+		DriverLog( "[CTRL] Activate objId=%u role=%s", unObjectId,
+			m_role == TrackedControllerRole_LeftHand ? "LeftHand" : "RightHand" );
 
 		VRProperties()->SetStringProperty( m_propContainer, Prop_TrackingSystemName_String, "vrcbridge" );
 		VRProperties()->SetStringProperty( m_propContainer, Prop_ManufacturerName_String, "Valve" );
@@ -683,11 +728,13 @@ private:
 			addr.sin_port = htons( kControllerInputPort );
 			inet_pton( AF_INET, "127.0.0.1", &addr.sin_addr );
 			bind( sock, reinterpret_cast<sockaddr *>( &addr ), sizeof( addr ) );
+			DriverLog( "[CTRL] input listener bound to 127.0.0.1:%u", kControllerInputPort );
 
 			DWORD timeoutMs = 200;
 			setsockopt( sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<char *>( &timeoutMs ), sizeof( timeoutMs ) );
 
 			ControllerInputPacket pkt;
+			unsigned long long count = 0;
 			while ( m_ctrlRunning )
 			{
 				int n = recv( sock, reinterpret_cast<char *>( &pkt ), sizeof( pkt ), 0 );
@@ -697,6 +744,10 @@ private:
 						m_left->ApplyPacket( pkt );
 					else if ( pkt.hand == 1 && m_right )
 						m_right->ApplyPacket( pkt );
+					if ( count == 0 || ( count % 180 ) == 0 )
+						DriverLog( "[CTRL] pkt #%llu hand=%u pos=[%+.2f %+.2f %+.2f] buttons=0x%X thumb=[%+.2f %+.2f]",
+							count, pkt.hand, pkt.px, pkt.py, pkt.pz, pkt.buttons, pkt.thumbX, pkt.thumbY );
+					count++;
 				}
 			}
 
