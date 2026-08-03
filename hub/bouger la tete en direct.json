@@ -1,0 +1,127 @@
+=== vrcbridge_probe : live OpenVR state ===
+WATCH mode (~3 Hz). Move the mouse / look around and watch yaw/pitch change. Ctrl+C to stop.
+HMD       y=+1.63 yaw=  +0.8 pit= -25.6 rol=  +0.0 | LeftHand  y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 | RightHand y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 |
+HMD       y=+1.63 yaw=  +0.8 pit= -25.6 rol=  +0.0 | LeftHand  y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 | RightHand y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 |
+HMD       y=+1.63 yaw=  +0.8 pit= -25.6 rol=  +0.0 | LeftHand  y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 | RightHand y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 |
+HMD       y=+1.63 yaw=  +0.8 pit= -25.6 rol=  +0.0 | LeftHand  y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 | RightHand y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 |
+HMD       y=+1.63 yaw=  +0.8 pit= -25.6 rol=  +0.0 | LeftHand  y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 | RightHand y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 |
+HMD       y=+1.63 yaw=  +0.8 pit= -25.6 rol=  +0.0 | LeftHand  y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 | RightHand y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 |
+HMD       y=+1.63 yaw=  +0.8 pit= -25.6 rol=  +0.0 | LeftHand  y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 | RightHand y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 |
+HMD       y=+1.63 yaw=  +0.8 pit= -25.6 rol=  +0.0 | LeftHand  y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 | RightHand y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 |
+HMD       y=+1.63 yaw=  +0.8 pit= -25.6 rol=  +0.0 | LeftHand  y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 | RightHand y=+1.07 yaw=  +0.8 pit= -25.6 rol=  +0.0 |
+HMD       y=+1.63 yaw= +19.7 pit= -23.8 rol=  -0.0 | LeftHand  y=+1.08 yaw= +19.7 pit= -23.8 rol=  -0.0 | RightHand y=+1.08 yaw= +19.7 pit= -23.8 rol=  -0.0 |
+HMD       y=+1.63 yaw= +55.5 pit= +42.8 rol=  -0.0 | LeftHand  y=+1.54 yaw= +55.5 pit= +42.8 rol=  -0.0 | RightHand y=+1.54 yaw= +55.5 pit= +42.8 rol=  -0.0 |
+HMD       y=+1.63 yaw= +50.1 pit= +35.2 rol=  +0.0 | LeftHand  y=+1.46 yaw= +50.1 pit= +35.2 rol=  +0.0 | RightHand y=+1.46 yaw= +50.1 pit= +35.2 rol=  +0.0 |
+HMD       y=+1.63 yaw= +50.1 pit= +35.2 rol=  +0.0 | LeftHand  y=+1.46 yaw= +50.1 pit= +35.2 rol=  +0.0 | RightHand y=+1.46 yaw= +50.1 pit= +35.2 rol=  +0.0 |
+HMD       y=+1.63 yaw= +50.1 pit= +35.2 rol=  +0.0 | LeftHand  y=+1.46 yaw= +50.1 pit= +35.2 rol=  +0.0 | RightHand y=+1.46 yaw= +50.1 pit= +35.2 rol=  +0.0 |
+HMD       y=+1.63 yaw= +50.1 pit= +35.2 rol=  +0.0 | LeftHand  y=+1.46 yaw= +50.1 pit= +35.2 rol=  +0.0 | RightHand y=+1.46 yaw= +50.1 pit= +35.2 rol=  +0.0 |
+HMD       y=+1.63 yaw= +50.1 pit= +35.2 rol=  +0.0 | LeftHand  y=+1.46 yaw= +50.1 pit= +35.2 rol=  +0.0 | RightHand y=+1.46 yaw= +50.1 pit= +35.2 rol=  +0.0 |
+HMD       y=+1.63 yaw= +68.8 pit= +25.4 rol=  -0.0 | LeftHand  y=+1.37 yaw= +68.8 pit= +25.4 rol=  +0.0 | RightHand y=+1.37 yaw= +68.8 pit= +25.4 rol=  +0.0 |
+HMD       y=+1.63 yaw= +57.2 pit=  +1.0 rol=  +0.2 | LeftHand  y=+1.19 yaw= +57.7 pit=  +1.1 rol=  -0.0 | RightHand y=+1.19 yaw= +57.7 pit=  +1.1 rol=  -0.0 |
+HMD       y=+1.63 yaw= +96.2 pit= +53.5 rol= +18.2 | LeftHand  y=+1.67 yaw= +75.6 pit= +55.9 rol=  -0.0 | RightHand y=+1.67 yaw= +75.6 pit= +55.9 rol=  -0.0 |
+HMD       y=+1.63 yaw= +35.8 pit= -41.5 rol=  +1.9 | LeftHand  y=+1.06 yaw= +43.9 pit= -44.9 rol=  +0.0 | RightHand y=+1.06 yaw= +43.9 pit= -44.9 rol=  +0.0 |
+HMD       y=+1.63 yaw=-164.8 pit= -59.3 rol=  -1.6 | LeftHand  y=+1.11 yaw=-165.7 pit= -62.7 rol=  -0.0 | RightHand y=+1.11 yaw=-165.7 pit= -62.7 rol=  -0.0 |
+HMD       y=+1.63 yaw= +60.5 pit= +24.1 rol=  -0.0 | LeftHand  y=+1.36 yaw= +60.5 pit= +24.1 rol=  -0.0 | RightHand y=+1.36 yaw= +60.5 pit= +24.1 rol=  -0.0 |
+HMD       y=+1.63 yaw=-175.6 pit= -41.9 rol=  +0.3 | LeftHand  y=+1.06 yaw=-175.0 pit= -42.9 rol=  +0.0 | RightHand y=+1.06 yaw=-175.0 pit= -42.9 rol=  +0.0 |
+HMD       y=+1.63 yaw= +33.0 pit= +17.1 rol=  -2.5 | LeftHand  y=+1.29 yaw= +35.7 pit= +15.1 rol=  -0.0 | RightHand y=+1.29 yaw= +35.7 pit= +15.1 rol=  -0.0 |
+HMD       y=+1.63 yaw= -94.7 pit= -59.3 rol= -11.3 | LeftHand  y=+1.11 yaw=-100.9 pit= -61.1 rol=  -0.0 | RightHand y=+1.11 yaw=-100.9 pit= -61.1 rol=  -0.0 |
+HMD       y=+1.63 yaw= +91.5 pit= +85.0 rol=  +0.8 | LeftHand  y=+1.94 yaw= +90.8 pit= +85.0 rol=  -0.0 | RightHand y=+1.94 yaw= +90.8 pit= +85.0 rol=  -0.0 |
+HMD       y=+1.63 yaw=+168.2 pit= +43.5 rol=  +0.0 | LeftHand  y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 | RightHand y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.2 pit= +43.5 rol=  +0.0 | LeftHand  y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 | RightHand y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.2 pit= +43.5 rol=  +0.0 | LeftHand  y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 | RightHand y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.2 pit= +43.5 rol=  +0.0 | LeftHand  y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 | RightHand y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.2 pit= +43.5 rol=  +0.0 | LeftHand  y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 | RightHand y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.2 pit= +43.5 rol=  +0.0 | LeftHand  y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 | RightHand y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.2 pit= +43.5 rol=  +0.0 | LeftHand  y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 | RightHand y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.2 pit= +43.5 rol=  +0.0 | LeftHand  y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 | RightHand y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.2 pit= +43.5 rol=  +0.0 | LeftHand  y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 | RightHand y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.2 pit= +43.5 rol=  +0.0 | LeftHand  y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 | RightHand y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.2 pit= +43.5 rol=  +0.0 | LeftHand  y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 | RightHand y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.2 pit= +43.5 rol=  +0.0 | LeftHand  y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 | RightHand y=+1.54 yaw=+168.2 pit= +43.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=-173.3 pit= +18.8 rol=  +0.0 | LeftHand  y=+1.32 yaw=-173.3 pit= +18.8 rol=  +0.0 | RightHand y=+1.32 yaw=-173.3 pit= +18.8 rol=  +0.0 |
+HMD       y=+1.63 yaw=-173.4 pit=  +3.1 rol=  -0.1 | LeftHand  y=+1.19 yaw=-173.7 pit=  +2.2 rol=  -0.0 | RightHand y=+1.19 yaw=-173.7 pit=  +2.2 rol=  -0.0 |
+HMD       y=+1.63 yaw=-169.7 pit=  -5.4 rol=  -0.0 | LeftHand  y=+1.15 yaw=-169.7 pit=  -5.4 rol=  -0.0 | RightHand y=+1.15 yaw=-169.7 pit=  -5.4 rol=  -0.0 |
+HMD       y=+1.63 yaw=-131.6 pit=  +9.7 rol=  +0.0 | LeftHand  y=+1.25 yaw=-131.6 pit=  +9.7 rol=  +0.0 | RightHand y=+1.25 yaw=-131.6 pit=  +9.7 rol=  +0.0 |
+HMD       y=+1.63 yaw=+153.0 pit= +50.0 rol=  -1.2 | LeftHand  y=+1.60 yaw=+154.9 pit= +49.5 rol=  -0.0 | RightHand y=+1.60 yaw=+154.9 pit= +49.5 rol=  -0.0 |
+HMD       y=+1.63 yaw=+137.9 pit= +36.6 rol=  -0.2 | LeftHand  y=+1.48 yaw=+138.6 pit= +36.4 rol=  -0.0 | RightHand y=+1.48 yaw=+138.6 pit= +36.4 rol=  -0.0 |
+HMD       y=+1.63 yaw= +69.4 pit= +25.0 rol=  -0.0 | LeftHand  y=+1.37 yaw= +69.6 pit= +25.0 rol=  -0.0 | RightHand y=+1.37 yaw= +69.6 pit= +25.0 rol=  -0.0 |
+HMD       y=+1.63 yaw= +72.1 pit=  -9.1 rol=  +1.6 | LeftHand  y=+1.13 yaw= +69.4 pit=  -8.2 rol=  -0.0 | RightHand y=+1.13 yaw= +69.4 pit=  -8.2 rol=  -0.0 |
+HMD       y=+1.63 yaw=+120.5 pit= -17.6 rol=  +0.0 | LeftHand  y=+1.10 yaw=+120.5 pit= -17.6 rol=  +0.0 | RightHand y=+1.10 yaw=+120.5 pit= -17.6 rol=  +0.0 |
+HMD       y=+1.63 yaw=+139.5 pit= -67.5 rol=  -0.0 | LeftHand  y=+1.13 yaw=+139.5 pit= -67.5 rol=  +0.0 | RightHand y=+1.13 yaw=+139.5 pit= -67.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+150.3 pit= -85.0 rol=  +0.0 | LeftHand  y=+1.24 yaw=+150.3 pit= -85.0 rol=  +0.0 | RightHand y=+1.24 yaw=+150.3 pit= -85.0 rol=  +0.0 |
+HMD       y=+1.63 yaw=+129.8 pit= -63.5 rol=  +0.6 | LeftHand  y=+1.11 yaw=+130.9 pit= -63.2 rol=  +0.0 | RightHand y=+1.11 yaw=+130.9 pit= -63.2 rol=  +0.0 |
+HMD       y=+1.63 yaw=+129.8 pit= -61.1 rol=  -0.6 | LeftHand  y=+1.11 yaw=+129.0 pit= -61.2 rol=  +0.0 | RightHand y=+1.11 yaw=+129.0 pit= -61.2 rol=  +0.0 |
+HMD       y=+1.63 yaw=+140.6 pit= -79.6 rol=  +0.0 | LeftHand  y=+1.20 yaw=+140.6 pit= -79.6 rol=  +0.0 | RightHand y=+1.20 yaw=+140.6 pit= -79.6 rol=  +0.0 |
+HMD       y=+1.63 yaw=+154.2 pit= -85.0 rol=  -5.8 | LeftHand  y=+1.24 yaw=+148.3 pit= -85.0 rol=  +0.0 | RightHand y=+1.24 yaw=+148.3 pit= -85.0 rol=  +0.0 |
+HMD       y=+1.63 yaw=+162.9 pit= -83.6 rol=  -0.0 | LeftHand  y=+1.23 yaw=+162.9 pit= -83.6 rol=  -0.0 | RightHand y=+1.23 yaw=+162.9 pit= -83.6 rol=  -0.0 |
+HMD       y=+1.63 yaw=+177.9 pit= -77.8 rol=  -0.5 | LeftHand  y=+1.19 yaw=+177.4 pit= -77.8 rol=  +0.0 | RightHand y=+1.19 yaw=+177.4 pit= -77.8 rol=  +0.0 |
+HMD       y=+1.63 yaw=+177.4 pit= -77.6 rol=  -0.0 | LeftHand  y=+1.19 yaw=+177.4 pit= -77.6 rol=  -0.0 | RightHand y=+1.19 yaw=+177.4 pit= -77.6 rol=  -0.0 |
+HMD       y=+1.63 yaw=+177.4 pit= -77.6 rol=  -0.0 | LeftHand  y=+1.19 yaw=+177.4 pit= -77.6 rol=  -0.0 | RightHand y=+1.19 yaw=+177.4 pit= -77.6 rol=  -0.0 |
+HMD       y=+1.63 yaw=+177.4 pit= -77.6 rol=  -0.0 | LeftHand  y=+1.19 yaw=+177.4 pit= -77.6 rol=  -0.0 | RightHand y=+1.19 yaw=+177.4 pit= -77.6 rol=  -0.0 |
+HMD       y=+1.63 yaw=+178.0 pit= -73.5 rol=  -0.0 | LeftHand  y=+1.17 yaw=+178.0 pit= -73.5 rol=  -0.0 | RightHand y=+1.17 yaw=+178.0 pit= -73.5 rol=  -0.0 |
+HMD       y=+1.63 yaw=+178.1 pit= -71.4 rol=  -0.0 | LeftHand  y=+1.15 yaw=+178.1 pit= -71.4 rol=  -0.0 | RightHand y=+1.15 yaw=+178.1 pit= -71.4 rol=  -0.0 |
+HMD       y=+1.63 yaw=-176.5 pit= -73.0 rol=  -0.2 | LeftHand  y=+1.16 yaw=-177.1 pit= -73.0 rol=  -0.0 | RightHand y=+1.16 yaw=-177.1 pit= -73.0 rol=  -0.0 |
+HMD       y=+1.63 yaw=-171.5 pit= -73.3 rol=  -0.2 | LeftHand  y=+1.17 yaw=-171.7 pit= -73.3 rol=  -0.0 | RightHand y=+1.17 yaw=-171.7 pit= -73.3 rol=  -0.0 |
+HMD       y=+1.63 yaw=+171.7 pit= -71.8 rol=  -0.0 | LeftHand  y=+1.16 yaw=+171.7 pit= -71.8 rol=  -0.0 | RightHand y=+1.16 yaw=+171.7 pit= -71.8 rol=  -0.0 |
+HMD       y=+1.63 yaw=+170.8 pit= -70.5 rol=  +0.0 | LeftHand  y=+1.15 yaw=+170.8 pit= -70.5 rol=  +0.0 | RightHand y=+1.15 yaw=+170.8 pit= -70.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+174.1 pit= -61.2 rol=  +0.0 | LeftHand  y=+1.11 yaw=+174.1 pit= -61.2 rol=  +0.0 | RightHand y=+1.11 yaw=+174.1 pit= -61.2 rol=  +0.0 |
+HMD       y=+1.63 yaw=+177.1 pit= -77.8 rol=  +0.0 | LeftHand  y=+1.19 yaw=+177.1 pit= -77.8 rol=  +0.0 | RightHand y=+1.19 yaw=+177.1 pit= -77.8 rol=  +0.0 |
+HMD       y=+1.63 yaw=+178.1 pit= -85.0 rol=  +0.0 | LeftHand  y=+1.24 yaw=+178.1 pit= -85.0 rol=  +0.0 | RightHand y=+1.24 yaw=+178.1 pit= -85.0 rol=  +0.0 |
+HMD       y=+1.63 yaw=+178.0 pit= -85.0 rol=  -0.0 | LeftHand  y=+1.24 yaw=+178.0 pit= -85.0 rol=  -0.0 | RightHand y=+1.24 yaw=+178.0 pit= -85.0 rol=  -0.0 |
+HMD       y=+1.63 yaw=+176.8 pit= -75.7 rol=  +0.0 | LeftHand  y=+1.18 yaw=+176.8 pit= -75.7 rol=  +0.0 | RightHand y=+1.18 yaw=+176.8 pit= -75.7 rol=  +0.0 |
+HMD       y=+1.63 yaw=+176.6 pit= -67.4 rol=  -0.0 | LeftHand  y=+1.13 yaw=+176.6 pit= -67.4 rol=  -0.0 | RightHand y=+1.13 yaw=+176.6 pit= -67.4 rol=  -0.0 |
+HMD       y=+1.63 yaw=-178.1 pit= -79.6 rol=  -0.0 | LeftHand  y=+1.20 yaw=-178.1 pit= -79.6 rol=  -0.0 | RightHand y=+1.20 yaw=-178.1 pit= -79.6 rol=  -0.0 |
+HMD       y=+1.63 yaw=-178.1 pit= -79.8 rol=  -0.0 | LeftHand  y=+1.21 yaw=-178.1 pit= -79.8 rol=  -0.0 | RightHand y=+1.21 yaw=-178.1 pit= -79.8 rol=  -0.0 |
+HMD       y=+1.63 yaw=-178.1 pit= -79.0 rol=  -0.0 | LeftHand  y=+1.20 yaw=-178.1 pit= -79.0 rol=  -0.0 | RightHand y=+1.20 yaw=-178.1 pit= -79.0 rol=  -0.0 |
+HMD       y=+1.63 yaw=-178.3 pit= -77.6 rol=  -0.0 | LeftHand  y=+1.19 yaw=-178.3 pit= -77.6 rol=  -0.0 | RightHand y=+1.19 yaw=-178.3 pit= -77.6 rol=  -0.0 |
+HMD       y=+1.63 yaw=-178.4 pit= -77.3 rol=  -0.0 | LeftHand  y=+1.19 yaw=-178.4 pit= -77.3 rol=  -0.0 | RightHand y=+1.19 yaw=-178.4 pit= -77.3 rol=  -0.0 |
+HMD       y=+1.63 yaw=-178.4 pit= -77.3 rol=  -0.0 | LeftHand  y=+1.19 yaw=-178.4 pit= -77.3 rol=  -0.0 | RightHand y=+1.19 yaw=-178.4 pit= -77.3 rol=  -0.0 |
+HMD       y=+1.63 yaw=-178.4 pit= -77.3 rol=  -0.0 | LeftHand  y=+1.19 yaw=-178.4 pit= -77.3 rol=  -0.0 | RightHand y=+1.19 yaw=-178.4 pit= -77.3 rol=  -0.0 |
+HMD       y=+1.63 yaw=-178.4 pit= -77.3 rol=  -0.0 | LeftHand  y=+1.19 yaw=-178.4 pit= -77.3 rol=  -0.0 | RightHand y=+1.19 yaw=-178.4 pit= -77.3 rol=  -0.0 |
+HMD       y=+1.63 yaw=-178.4 pit= -77.3 rol=  -0.0 | LeftHand  y=+1.19 yaw=-178.4 pit= -77.3 rol=  -0.0 | RightHand y=+1.19 yaw=-178.4 pit= -77.3 rol=  -0.0 |
+HMD       y=+1.63 yaw=+175.7 pit= -77.1 rol=  +0.9 | LeftHand  y=+1.19 yaw=+176.7 pit= -77.1 rol=  -0.0 | RightHand y=+1.19 yaw=+176.7 pit= -77.1 rol=  -0.0 |
+HMD       y=+1.63 yaw=+170.2 pit= -77.1 rol=  +0.0 | LeftHand  y=+1.19 yaw=+170.2 pit= -77.1 rol=  +0.0 | RightHand y=+1.19 yaw=+170.2 pit= -77.1 rol=  +0.0 |
+HMD       y=+1.63 yaw=+167.0 pit= -77.1 rol=  -0.0 | LeftHand  y=+1.19 yaw=+167.0 pit= -77.1 rol=  -0.0 | RightHand y=+1.19 yaw=+167.0 pit= -77.1 rol=  -0.0 |
+HMD       y=+1.63 yaw=+164.7 pit= -76.7 rol=  -0.0 | LeftHand  y=+1.19 yaw=+164.7 pit= -76.7 rol=  -0.0 | RightHand y=+1.19 yaw=+164.7 pit= -76.7 rol=  -0.0 |
+HMD       y=+1.63 yaw=+164.7 pit= -76.5 rol=  +0.0 | LeftHand  y=+1.18 yaw=+164.7 pit= -76.5 rol=  +0.0 | RightHand y=+1.18 yaw=+164.7 pit= -76.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+164.7 pit= -76.5 rol=  +0.0 | LeftHand  y=+1.18 yaw=+164.7 pit= -76.5 rol=  +0.0 | RightHand y=+1.18 yaw=+164.7 pit= -76.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+164.7 pit= -76.5 rol=  +0.0 | LeftHand  y=+1.18 yaw=+164.7 pit= -76.5 rol=  +0.0 | RightHand y=+1.18 yaw=+164.7 pit= -76.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+164.7 pit= -76.5 rol=  +0.0 | LeftHand  y=+1.18 yaw=+164.7 pit= -76.5 rol=  +0.0 | RightHand y=+1.18 yaw=+164.7 pit= -76.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+164.7 pit= -76.5 rol=  +0.0 | LeftHand  y=+1.18 yaw=+164.7 pit= -76.5 rol=  +0.0 | RightHand y=+1.18 yaw=+164.7 pit= -76.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+167.4 pit= -74.4 rol=  -0.0 | LeftHand  y=+1.17 yaw=+167.4 pit= -74.4 rol=  -0.0 | RightHand y=+1.17 yaw=+167.4 pit= -74.4 rol=  -0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+168.1 pit= -74.3 rol=  +0.0 | LeftHand  y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 | RightHand y=+1.17 yaw=+168.1 pit= -74.3 rol=  +0.0 |
+HMD       y=+1.63 yaw=+166.8 pit= -74.0 rol=  +0.3 | LeftHand  y=+1.17 yaw=+167.1 pit= -74.0 rol=  -0.0 | RightHand y=+1.17 yaw=+167.1 pit= -74.0 rol=  -0.0 |
+HMD       y=+1.63 yaw=+166.7 pit= -73.5 rol=  +0.0 | LeftHand  y=+1.17 yaw=+166.7 pit= -73.5 rol=  +0.0 | RightHand y=+1.17 yaw=+166.7 pit= -73.5 rol=  +0.0 |
+HMD       y=+1.63 yaw=+132.7 pit=  +0.7 rol=  +0.0 | LeftHand  y=+1.18 yaw=+132.7 pit=  +0.7 rol=  -0.0 | RightHand y=+1.18 yaw=+132.7 pit=  +0.7 rol=  -0.0 |
+HMD       y=+1.63 yaw=+132.7 pit=  +0.4 rol=  -0.0 | LeftHand  y=+1.18 yaw=+132.7 pit=  +0.4 rol=  -0.0 | RightHand y=+1.18 yaw=+132.7 pit=  +0.4 rol=  -0.0 |
+HMD       y=+1.63 yaw=+132.7 pit=  +0.4 rol=  -0.0 | LeftHand  y=+1.18 yaw=+132.7 pit=  +0.4 rol=  -0.0 | RightHand y=+1.18 yaw=+132.7 pit=  +0.4 rol=  -0.0 |
+HMD       y=+1.63 yaw=+132.7 pit=  +0.4 rol=  -0.0 | LeftHand  y=+1.18 yaw=+132.7 pit=  +0.4 rol=  -0.0 | RightHand y=+1.18 yaw=+132.7 pit=  +0.4 rol=  -0.0 |
+HMD       y=+1.63 yaw=+132.7 pit=  +0.4 rol=  -0.0 | LeftHand  y=+1.18 yaw=+132.7 pit=  +0.4 rol=  -0.0 | RightHand y=+1.18 yaw=+132.7 pit=  +0.4 rol=  -0.0 |
+HMD       y=+1.63 yaw=+132.0 pit=  +0.4 rol=  +0.0 | LeftHand  y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 | RightHand y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 |
+HMD       y=+1.63 yaw=+132.0 pit=  +0.4 rol=  +0.0 | LeftHand  y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 | RightHand y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 |
+HMD       y=+1.63 yaw=+132.0 pit=  +0.4 rol=  +0.0 | LeftHand  y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 | RightHand y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 |
+HMD       y=+1.63 yaw=+132.0 pit=  +0.4 rol=  +0.0 | LeftHand  y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 | RightHand y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 |
+HMD       y=+1.63 yaw=+132.0 pit=  +0.4 rol=  +0.0 | LeftHand  y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 | RightHand y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 |
+HMD       y=+1.63 yaw=+132.0 pit=  +0.4 rol=  +0.0 | LeftHand  y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 | RightHand y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 |
+HMD       y=+1.63 yaw=+132.0 pit=  +0.4 rol=  +0.0 | LeftHand  y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 | RightHand y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 |
+HMD       y=+1.63 yaw=+132.0 pit=  +0.4 rol=  +0.0 | LeftHand  y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 | RightHand y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 |
+HMD       y=+1.63 yaw=+132.0 pit=  +0.4 rol=  +0.0 | LeftHand  y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 | RightHand y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 |
+HMD       y=+1.63 yaw=+132.0 pit=  +0.4 rol=  +0.0 | LeftHand  y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 | RightHand y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 |
+HMD       y=+1.63 yaw=+132.0 pit=  +0.4 rol=  +0.0 | LeftHand  y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 | RightHand y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 |
+HMD       y=+1.63 yaw=+132.0 pit=  +0.4 rol=  +0.0 | LeftHand  y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 | RightHand y=+1.18 yaw=+132.0 pit=  +0.4 rol=  +0.0 |
