@@ -1,0 +1,11 @@
+# Ce qui est passé par ce dépôt sans avoir été écrit ici.
+# GitHub s'en sert pour sa barre de langages, et le compteur du profil
+# (shazamifius/shazamifius, stats/compute.mjs) ne compte jamais ces lignes,
+# sur aucune branche.
+
+# blaze_app_python (AlbertaBeef), démo MediaPipe, licence Apache 2.0 — voir CREDITS.md.
+blaze_app_python-main/** linguist-vendored
+# VRChat MCP OSC, projet open source tiers.
+vrchat-mcp-osc-main/** linguist-vendored
+# En-têtes OpenVR (Valve).
+**/headers/openvr*.h linguist-vendored
