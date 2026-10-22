@@ -42,7 +42,7 @@ qrcodegen = "1.8" # QR Code generation
 reqwest = { version = "0.12", features = ["json"] } # HTTP Client for local server
 base64 = "0.22" # For QR code data URI
 regex = "1" # For parsing Cloudflare logs
-rand = "0.8" # For Eye Saccades
+rand = "0.9" # For Eye Saccades
 # Web Server (MJPEG)
 axum = { version = "0.7", features = ["macros"] }
 tower-http = { version = "0.5", features = ["cors"] }
