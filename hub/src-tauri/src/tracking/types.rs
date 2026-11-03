@@ -72,7 +72,16 @@ pub struct TrackingData {
     pub face_landmarks: Option<Vec<[f32; 3]>>, // 468 points (x, y, z)
     pub left_hand_landmarks: Option<Vec<[f32; 3]>>, // 21 points
     pub right_hand_landmarks: Option<Vec<[f32; 3]>>, // 21 points
+    #[serde(default)]
+    pub pose_landmarks: Option<Vec<[f32; 3]>>, // 33 BlazePose body points (x, y, z) in frame pixels
     pub head_rotation: Option<[f32; 4]>, // Quaternion (x, y, z, w)
+    // Pixel dimensions of the image these landmarks were computed in.
+    // Carried WITH the landmarks so the solver always uses the matching
+    // resolution (kills the status/landmark race + scale mismatch).
+    #[serde(default)]
+    pub frame_w: f32,
+    #[serde(default)]
+    pub frame_h: f32,
 }
 
 /// Commands sent from Frontend/Tauri to the Tracking Logic

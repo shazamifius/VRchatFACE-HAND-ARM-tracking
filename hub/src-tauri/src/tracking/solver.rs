@@ -309,6 +309,11 @@ impl Solver {
     }
 
     pub fn solve(&mut self, data: &TrackingData, cam_w: f32, cam_h: f32) -> SolverOutput {
+        // Defensive: invalid dimensions would make hand/PnP math divide by zero
+        // and emit NaN/inf, which permanently poisons the OneEuro filters.
+        let cam_w = if cam_w > 1.0 { cam_w } else { 640.0 };
+        let cam_h = if cam_h > 1.0 { cam_h } else { 480.0 };
+
         let mut params = Vec::new();
         let mut trackers = Vec::new();
 
@@ -408,8 +413,18 @@ impl Solver {
                 cam_w, Vector2::new(cam_w / 2.0, cam_h / 2.0)
             );
             q_raw = q;
-            t_raw = t;
-            
+            // Clamp the PnP translation to a physically plausible box (cm). Noisy
+            // landmarks (esp. in low light) can make Gauss-Newton diverge to huge
+            // values (e.g. head "position" of -191 m), and because we feed the
+            // result back as the next initial guess, one bad solve poisons all
+            // following frames. Clamping keeps the head near the camera and stops
+            // the feedback blow-up.
+            t_raw = Vector3::new(
+                t.x.clamp(-40.0, 40.0),
+                t.y.clamp(-40.0, 40.0),
+                t.z.clamp(20.0, 150.0),
+            );
+
             self.last_rotation = Some(q_raw);
             self.last_translation = Some(t_raw);
         }
@@ -456,17 +471,20 @@ impl Solver {
         let mut cal_data = HashMap::new();
         
         if let Some(face) = &data.face_landmarks {
+            // 2D only: blink / jaw / gaze are screen-space aperture RATIOS. The
+            // model's per-vertex Z is noisy depth and was polluting these .norm()
+            // distances (e.g. pinning EyeBlink at 1.0). Drop Z for these ratios.
             let get_pt = |idx: usize| -> Vector3<f32> {
                  if idx < face.len() {
                     let p = face[idx];
-                    Vector3::new(p[0], p[1], p[2])
+                    Vector3::new(p[0], p[1], 0.0)
                 } else { Vector3::zeros() }
             };
 
             // Blink
             let left_ratio = (get_pt(159) - get_pt(145)).norm() / (get_pt(33) - get_pt(133)).norm();
             let right_ratio = (get_pt(386) - get_pt(374)).norm() / (get_pt(362) - get_pt(263)).norm();
-            
+
             let real_blink = left_ratio < 0.25 && right_ratio < 0.25;
             let (s_pitch, s_yaw) = self.update_saccades();
             let auto_blink = self.update_auto_blink(real_blink);

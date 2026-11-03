@@ -23,15 +23,24 @@ impl BlazeDetector {
 
         let anchors = generate_anchors(&anchor_options);
         
+        // Determine tensor layout from the model's ACTUAL input shape, not the node
+        // name. Names like "x.1" are generic PyTorch-export names and were wrongly
+        // matched as NHWC, which fed the model a transposed tensor (got [1,128,128,3],
+        // expected [1,3,128,128]) -> every inference failed silently -> no detections.
+        // For a 4-D image input, the axis whose size is 3 is the channel axis:
+        //   [N, 3, H, W] => NCHW   |   [N, H, W, 3] => NHWC
         let mut is_nchw = true;
         if let Some(input) = session.inputs().get(0) {
-            let name = input.name();
-            println!("[Rust] Detector input name: {}", name);
-            if name.contains("_1") || name.contains(".1") || name.to_lowercase().contains("nhwc") {
-                is_nchw = false;
-                println!("[Rust] Model '{}' detected as NHWC.", name);
+            let name = input.name().to_string();
+            if let ort::value::ValueType::Tensor { shape, .. } = input.dtype() {
+                if shape.len() == 4 && shape[1] == 3 {
+                    is_nchw = true;
+                } else if shape.len() == 4 && shape[3] == 3 {
+                    is_nchw = false;
+                }
+                println!("[Rust] Detector '{}' input shape {:?} -> {}", name, &shape[..], if is_nchw { "NCHW" } else { "NHWC" });
             } else {
-                println!("[Rust] Model '{}' detected as NCHW.", name);
+                println!("[Rust] Detector '{}' input is not a tensor; assuming NCHW", name);
             }
         }
 
@@ -57,10 +66,14 @@ impl BlazeDetector {
         };
 
         for (x, y, pixel) in resized_img.pixels() {
-            let r = pixel[0] as f32 / 255.0;
-            let g = pixel[1] as f32 / 255.0;
-            let b = pixel[2] as f32 / 255.0;
-            
+            // BlazeFace / Palm detectors expect input normalized to [-1, 1]
+            // (x/127.5 - 1.0), NOT [0, 1]. Using [0,1] starved the model and
+            // produced near-zero confidence scores (~0.09), so almost nothing
+            // ever passed the detection threshold. (Landmark models DO use [0,1].)
+            let r = pixel[0] as f32 / 127.5 - 1.0;
+            let g = pixel[1] as f32 / 127.5 - 1.0;
+            let b = pixel[2] as f32 / 127.5 - 1.0;
+
             if self.is_nchw {
                 input_tensor[[0, 0, y as usize, x as usize]] = r;
                 input_tensor[[0, 1, y as usize, x as usize]] = g;
@@ -127,26 +140,29 @@ impl BlazeDetector {
             println!("[AI DEBUG] NMS kept {} face detections", filtered.len());
         }
 
-        // 6. Denormalize to original image
+        // 6. Denormalize to original image.
+        // decode_boxes returns NORMALIZED [0,1] coords (anchor centers are [0,1]).
+        // To undo the letterbox we must first scale them to input-pixel space
+        // (×input_size), THEN remove padding and the resize scale:
+        //   orig = (coord * input_size - pad) / scale
+        // The missing ×input_size collapsed every box to ~(2,-137) (top-left),
+        // which crushed all landmarks to a point — broke face AND hand tracking.
+        let in_w = self.input_size.0 as f32;
+        let in_h = self.input_size.1 as f32;
         let mut final_detections = Vec::new();
         for det in filtered {
             let mut d = det.clone();
-            // Undo padding and scaling
-            // x_new = (x_old * input_size - pad) / scale
-            
-            // Current coordinates are absolute in input_size domain because of decode_boxes using scale/anchor size
-            // Wait, decode_boxes uses config.x_scale which is input_size. So coords are pixels in [0, input_size].
-            
-            d.xmin = (d.xmin - pad_w) / scale;
-            d.xmax = (d.xmax - pad_w) / scale;
-            d.ymin = (d.ymin - pad_h) / scale;
-            d.ymax = (d.ymax - pad_h) / scale;
-            
+
+            d.xmin = (d.xmin * in_w - pad_w) / scale;
+            d.xmax = (d.xmax * in_w - pad_w) / scale;
+            d.ymin = (d.ymin * in_h - pad_h) / scale;
+            d.ymax = (d.ymax * in_h - pad_h) / scale;
+
             for k in 0..d.keypoints.len() {
-                d.keypoints[k].0 = (d.keypoints[k].0 - pad_w) / scale;
-                d.keypoints[k].1 = (d.keypoints[k].1 - pad_h) / scale;
+                d.keypoints[k].0 = (d.keypoints[k].0 * in_w - pad_w) / scale;
+                d.keypoints[k].1 = (d.keypoints[k].1 * in_h - pad_h) / scale;
             }
-            
+
             final_detections.push(d);
         }
 

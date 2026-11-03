@@ -16,14 +16,26 @@ MODELS = {
         "https://github.com/ibaiGorordo/ONNX-MediaPipe-Face-Mesh/raw/main/data/face_mesh.onnx",
         "https://raw.githubusercontent.com/cedro3/mediapipe_onnx/main/data/face_landmark.onnx",
     ],
+    # NOTE: opencv_zoo stores .onnx files via Git LFS. The plain
+    # raw.githubusercontent.com URL returns a ~130-byte LFS *pointer*, NOT the
+    # model — you MUST use the media.githubusercontent.com/media/ endpoint, which
+    # serves the real binary. (raw mirrors are kept as fallbacks.)
     "palm_detection.onnx": [
-        "https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/palm_detection_mediapipe/palm_detection_mediapipe_2023feb.onnx",
+        "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/palm_detection_mediapipe/palm_detection_mediapipe_2023feb.onnx",
         "https://github.com/Vidya-Suri/hand-gesture-recognition/raw/main/model/palm_detection.onnx",
     ],
     "hand_landmark.onnx": [
-        "https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/handpose_estimation_mediapipe/handpose_estimation_mediapipe_2023feb.onnx",
+        "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/handpose_estimation_mediapipe/handpose_estimation_mediapipe_2023feb.onnx",
         "https://github.com/Wolvic/wolvic/raw/master/app/src/main/assets/hand_landmark_full.onnx",
-    ]
+    ],
+    # Body pose (BlazePose). Landmark model outputs 33 keypoints; detector is for
+    # Phase 1.5 robustness. Both live in opencv_zoo behind Git LFS (media URL).
+    "pose_landmark.onnx": [
+        "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/pose_estimation_mediapipe/pose_estimation_mediapipe_2023mar.onnx",
+    ],
+    "pose_detection.onnx": [
+        "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/person_detection_mediapipe/person_detection_mediapipe_2023mar.onnx",
+    ],
 }
 
 script_dir = os.path.dirname(os.path.abspath(__file__))

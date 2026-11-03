@@ -10,6 +10,12 @@ hub/src-tauri/target/
 vcpkg/
 vcpkg_installed/
 
+# CMake build output for the SteamVR driver (artifacts only; source is tracked)
+driver/build/
+# Diagnostic probe build output + generated report (source is tracked)
+diag/build/
+diag/report.txt
+
 # Visual Studio
 .vs/
 *.user
@@ -29,8 +35,9 @@ vcpkg_installed/
 *.exp
 *.lib
 
-# AI Models (too large, downloaded via script)
-models/*.onnx
+# AI Models (too large, downloaded via script). Pattern is unanchored so it also
+# covers hub/src-tauri/models/ (where the engine actually loads them from).
+*.onnx
 models/*.task
 models/*.tflite
 
@@ -39,6 +46,9 @@ models/*.tflite
 
 # Cloudflared binary (downloaded automatically)
 scripts/cloudflared/*.exe
+
+# VMT driver (downloaded + extracted automatically by setup_vmt.ps1)
+hub/tools/
 
 # Logs
 *.log
@@ -84,3 +94,6 @@ _ARCHIVE/
 
 # Misc
 imgui.ini
+
+# Graphify analysis output (knowledge graph, not project code)
+graphify-out/

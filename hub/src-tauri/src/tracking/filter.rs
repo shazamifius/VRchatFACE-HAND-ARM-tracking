@@ -23,8 +23,15 @@ impl OneEuroFilter {
     }
 
     pub fn filter(&mut self, x: f32) -> f32 {
+        // Guard against NaN/inf: a single non-finite sample would otherwise
+        // be stored in x_prev and poison every future output forever.
+        // Drop the bad sample and hold the last good value instead.
+        if !x.is_finite() {
+            return self.x_prev;
+        }
+
         let t = Instant::now();
-        
+
         if self.t_prev.is_none() {
             self.x_prev = x;
             self.dx_prev = 0.0;

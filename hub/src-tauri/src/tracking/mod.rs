@@ -11,6 +11,11 @@ pub mod web_interface;
 pub mod types;
 pub mod blaze;
 pub mod bridge;
+pub mod vmt;
+pub mod head_bridge;
+pub mod mouse_look;
+pub mod controller_input;
+pub mod body;
 pub mod solver;
 pub mod filter;
 pub mod terminal_monitor;
@@ -84,20 +89,23 @@ impl TrackingEngine {
         let data = self.data.clone(); 
         let commands = self.commands.clone();
 
-        let mut running_guard = running.lock().unwrap();
+        let mut running_guard = running.lock().unwrap_or_else(|e| e.into_inner());
         if *running_guard {
             return Ok(());
         }
         *running_guard = true;
         drop(running_guard); // Release lock before long operations
 
-        // Start OSC Bridge (Receiver)
-        let bridge = OscBridge::new(9002).expect("Failed to bind OSC Bridge port 9002");
+        // Start OSC Bridge (Receiver) — optional. Only used when landmarks arrive
+        // over OSC from an external AI. Must NOT crash the app if port 9002 is busy
+        // (e.g. during a quick stop -> start when switching cameras).
+        let bridge_opt = OscBridge::new(9002).ok();
         let data_clone = data.clone();
         let status_clone = status.clone();
         let status_logic = status.clone(); // For logic thread profiling
-        
+
         let bridge_running = running.clone();
+        if let Some(bridge) = bridge_opt {
         bridge.start(bridge_running, Box::new(move |addr, args| {
             // Update TrackingData based on address
             // /tracking/face/landmarks
@@ -159,6 +167,9 @@ impl TrackingEngine {
                 }
             }
         }));
+        } else {
+            println!("[Rust] OSC Bridge receiver port 9002 unavailable; continuing without OSC-input bridge.");
+        }
 
         // Start Web Server (Moved to lib.rs setup)
         // let web_clone = web.clone();
@@ -215,9 +226,17 @@ impl TrackingEngine {
              }
               if let Ok(mut cam) = camera.lock() {
                  if !use_remote_cam {
-                     if let Err(e) = cam.start(config_clone) { 
-                         crate::logging::log(&format!("[Rust] Failed to start camera: {}", e)); 
-                         return; 
+                     if let Err(e) = cam.start(config_clone) {
+                         crate::logging::log(&format!("[Rust] Failed to start camera: {}", e));
+                         // Don't leave a zombie "running" session with no camera —
+                         // clear the flag so Stop / Start / camera-switch can recover.
+                         if let Ok(mut r) = running.lock() { *r = false; }
+                         if let Ok(mut s) = status_capture.lock() {
+                             s.running = false;
+                             s.diagnostic_message = Some(format!("Camera failed to start: {}", e));
+                         }
+                         println!("[Rust] Camera start failed -> session cleared. {}", e);
+                         return;
                      }
                       if let Ok(mut s) = status_capture.lock() {
                           if true {
@@ -236,7 +255,7 @@ impl TrackingEngine {
             let mut frame_count = 0;
             let mut last_fps_update = std::time::Instant::now();
 
-            while *running.lock().unwrap() {
+            while *running.lock().unwrap_or_else(|e| e.into_inner()) {
                 // 1. Capture Frame
                 let frame_result = if use_remote_cam {
                     // Maximum Remote FPS control?
@@ -282,8 +301,31 @@ impl TrackingEngine {
 
                 match frame_result {
                     Ok(image) => {
+                         // Downscale large frames BEFORE inference. The camera often
+                         // streams 1080p (cheap to capture) but running 4 ONNX models
+                         // on 1080p collapses the pipeline to <1 fps. Cap width at 640:
+                         // the models downsample to 128/224 internally anyway, so
+                         // accuracy is unaffected while per-frame CPU cost drops ~9x.
+                         // Landmarks then live in this resolution, and frame_w/h is
+                         // stamped from it (below), so the solver stays consistent.
+                         let image = {
+                             let w = image.width();
+                             // Cap at 960px (was 640): the ONNX models run at fixed
+                             // 128/192/224 and extract_roi samples a fixed grid, so the
+                             // per-frame cost barely changes, but a larger frame gives
+                             // the face-mesh crop far more detail — needed to actually
+                             // capture mouth/eye motion (640 was too coarse: jaw/blink
+                             // landmarks barely moved).
+                             const INFER_W: u32 = 640;
+                             if w > INFER_W {
+                                 let target_h = (image.height() * INFER_W / w).max(1);
+                                 image::imageops::resize(&image, INFER_W, target_h, image::imageops::FilterType::Triangle)
+                             } else {
+                                 image
+                             }
+                         };
                          let image_arc = Arc::new(image);
-                    
+
                          // Non-blocking send to encoder (Try Send)
                          // For remote cameras, the HTTP endpoint already broadcasts the raw JPEG, so we skip re-encoding
                          // to absolutely prevent interleaving frame rollbacks on the UI stream.
@@ -291,21 +333,42 @@ impl TrackingEngine {
                              let _ = tx.try_send(image_arc.clone());
                          }
 
-                        // 2. Inference
-                        let mut ai_guard = ai.lock().unwrap();
-                        let inference_result = ai_guard.run_inference(&image_arc);
-                        
-                        let (face, left, right, brightness, diagnostic) = match inference_result {
-                            Ok(res) => res,
-                            Err(e) => {
-                                (None, None, None, 0.0, Some(format!("AI Error: {}", e)))
+                        // 2. Inference — isolated per frame. A panic inside one
+                        // frame's inference (e.g. a degenerate crop) used to unwind
+                        // and KILL this whole tracking thread silently: no more
+                        // landmarks were produced while the OSC thread kept
+                        // re-emitting the last value forever, so the app "froze".
+                        // catch_unwind contains the panic, logs where it happened,
+                        // drops that frame, and lets tracking keep running. The lock
+                        // is taken poison-tolerantly so a prior panic can't cascade.
+                        let inference_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let mut ai_guard = ai.lock().unwrap_or_else(|e| e.into_inner());
+                            ai_guard.run_inference(&image_arc)
+                        }));
+
+                        let (face, left, right, pose, brightness, diagnostic) = match inference_result {
+                            Ok(Ok(res)) => res,
+                            Ok(Err(e)) => {
+                                // [DIAG] Surface the real inference error to the console.
+                                println!("[AI ERROR] run_inference failed: {:#}", e);
+                                (None, None, None, None, 0.0, Some(format!("AI Error: {}", e)))
+                            }
+                            Err(panic) => {
+                                let msg = panic
+                                    .downcast_ref::<&str>()
+                                    .map(|s| s.to_string())
+                                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                                    .unwrap_or_else(|| "unknown panic".to_string());
+                                println!("[AI PANIC] inference panicked (frame skipped): {}", msg);
+                                (None, None, None, None, 0.0, Some("AI Panic (recovered)".to_string()))
                             }
                         };
-                        
+
                         // BUG-08 FIX: Track what was actually detected this frame
                         let has_face = face.is_some();
                         let has_left = left.is_some();
                         let has_right = right.is_some();
+                        let has_pose = pose.is_some();
 
                         // Write to Data (Solver will pick it up)
                         let mut data_for_emit = None;
@@ -313,7 +376,12 @@ impl TrackingEngine {
                              d.face_landmarks = face;
                              d.left_hand_landmarks = left;
                              d.right_hand_landmarks = right;
-                             
+                             d.pose_landmarks = pose;
+                             // Stamp the exact resolution the landmarks live in,
+                             // so the solver scales against the right dimensions.
+                             d.frame_w = image_arc.width() as f32;
+                             d.frame_h = image_arc.height() as f32;
+
                              // Clone for emission
                              data_for_emit = Some(d.clone());
                         }
@@ -344,6 +412,16 @@ impl TrackingEngine {
                                 s.frame_time_ms = 1000.0 / fps;
                                 s.running = true;
                             }
+                            // Concise 1 Hz health summary (replaces the per-frame spam).
+                            println!(
+                                "[Status] {:>4.1} fps | face:{} Lhand:{} Rhand:{} body:{} | brightness:{:.0}",
+                                fps,
+                                if has_face { "ON " } else { "off" },
+                                if has_left { "ON " } else { "off" },
+                                if has_right { "ON " } else { "off" },
+                                if has_pose { "ON " } else { "off" },
+                                brightness
+                            );
                             frame_count = 0;
                             last_fps_update = std::time::Instant::now();
                         }
@@ -373,9 +451,52 @@ impl TrackingEngine {
         thread::spawn(move || {
             let mut solver = Solver::new();
             println!("[Rust] Logic thread started");
+
+            // VMT body-tracker output (SteamVR device emulation). DISABLED by
+            // default: webcam body pose is currently unreliable, and feeding bad
+            // hip/chest tracker poses makes VRChat's full-body IK contort the
+            // avatar — wrong "gravity", walking on walls, and the head failing to
+            // turn in-world. Until body tracking is calibrated+reliable we run
+            // head + 2 controllers only (stable 3-point). Opt in with VMT_BODY=1.
+            let vmt = if std::env::var("VMT_BODY").as_deref() == Ok("1") {
+                let v = crate::tracking::vmt::VmtBridge::new().ok();
+                if v.is_some() {
+                    println!("[Rust] VMT body-tracker output ENABLED (VMT_BODY=1, 127.0.0.1:39570).");
+                }
+                v
+            } else {
+                println!("[Rust] VMT body trackers OFF (set VMT_BODY=1 to enable). Head+controllers only.");
+                None
+            };
+
+            // Head output -> our own virtual HMD driver (vrcbridge) on UDP 39571.
+            // Streams the solver's smoothed head quaternion every frame so the
+            // VRChat view turns with the user's head. Continuous + filtered, so
+            // no teleport jumps (which SteamVR/VRChat read as tracking loss).
+            let head = crate::tracking::head_bridge::HeadBridge::new().ok();
+            if head.is_some() {
+                println!("[Rust] Head output ready -> vrcbridge HMD (127.0.0.1:39571).");
+            } else {
+                println!("[Rust] Head socket unavailable; HMD rotation will not be sent.");
+            }
+
+            // Mouse-look: hold the RIGHT mouse button to turn the head a full
+            // 360° (the webcam alone tops out near ±86°). Fused with the webcam
+            // orientation below. Cursor stays free when the button isn't held.
+            let mut mouse_look = crate::tracking::mouse_look::MouseLook::new();
+
+            // Controller input: mouse aims the laser + clicks, keyboard moves /
+            // opens menu, driving the two virtual VR controllers (UDP 39572) so
+            // the user can navigate VRChat's VR menus and walk around.
+            let controllers = crate::tracking::controller_input::ControllerInput::new().ok();
+            if controllers.is_some() {
+                println!("[Rust] Controller input ready -> vrcbridge hands (127.0.0.1:39572).");
+            } else {
+                println!("[Rust] Controller socket unavailable; menu navigation will not be sent.");
+            }
             
             let mut _last_log = std::time::Instant::now();
-            while *running_logic.lock().unwrap() {
+            while *running_logic.lock().unwrap_or_else(|e| e.into_inner()) {
                 let start = std::time::Instant::now();
                 
                 
@@ -412,12 +533,92 @@ impl TrackingEngine {
 
                 // 2. Solve (profiled)
                 let t_solve = std::time::Instant::now();
+                // Use the resolution stamped onto the data itself (atomic with the
+                // landmarks). Fall back to status dims, then a sane default, so a
+                // momentarily-unset value can never reach the solver as 0.
                 let (cam_w, cam_h) = {
-                    let s = status_logic.lock().unwrap();
-                    (s.camera_width as f32, s.camera_height as f32)
+                    if tracking_data.frame_w > 0.0 && tracking_data.frame_h > 0.0 {
+                        (tracking_data.frame_w, tracking_data.frame_h)
+                    } else {
+                        let s = status_logic.lock().unwrap();
+                        let (sw, sh) = (s.camera_width as f32, s.camera_height as f32);
+                        if sw > 0.0 && sh > 0.0 { (sw, sh) } else { (640.0, 480.0) }
+                    }
                 };
                 let output = solver.solve(&tracking_data, cam_w, cam_h);
                 let solve_ms = t_solve.elapsed().as_secs_f32() * 1000.0;
+
+                // --- VMT BODY OUTPUT --- Map the 33-pt body pose to upper-body
+                // SteamVR trackers (hips + chest) and drive VMT. This is the
+                // body path: VRChat's IK animates the avatar's torso lean from
+                // these real tracked devices — what OSC avatar params can't do.
+                // (Feet are omitted by design for seated/desk users.)
+                if let (Some(vmt), Some(pose)) = (&vmt, &tracking_data.pose_landmarks) {
+                    let body = crate::tracking::body::pose_to_body_trackers(pose, cam_w, cam_h);
+                    if !body.is_empty() {
+                        if let Err(e) = vmt.send_trackers(&body) {
+                            eprintln!("[Rust] VMT send error: {}", e);
+                        }
+                    }
+                }
+
+                // --- HEAD OUTPUT --- Forward the head orientation to the virtual
+                // HMD and use it to anchor the controllers (gaze laser).
+                let (mouse_yaw, mouse_pitch) = mouse_look.poll();
+                // Head orientation = MOUSE-LOOK ONLY. The webcam head pose (PnP on
+                // face landmarks, SYS_HEAD_ROT_*) is too unstable for the HMD: it
+                // injects roll (view ends up on its side), inverts pitch, and jumps
+                // wildly — and a tilted/jittery orientation when VRChat calibrates
+                // on world entry breaks the avatar (10 cm tall, frozen). The webcam
+                // still drives the face blendshapes over OSC; it just no longer
+                // rotates the headset. Pure yaw+pitch = always upright, no roll.
+                let head_quat = {
+                    use nalgebra::{UnitQuaternion, Vector3};
+                    let q_yaw = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), mouse_yaw);
+                    let q_pitch = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), mouse_pitch);
+                    let q = (q_yaw * q_pitch).into_inner();
+                    [q.i, q.j, q.k, q.w]
+                };
+                if let Some(head) = &head {
+                    if let Err(e) = head.send_rotation(head_quat) {
+                        eprintln!("[Rust] Head send error: {}", e);
+                    }
+                }
+                if let Some(controllers) = &controllers {
+                    if let Err(e) = controllers.update(head_quat) {
+                        eprintln!("[Rust] Controller send error: {}", e);
+                    }
+                }
+
+                // [OSC OUT] 1 Hz dump of the ACTUAL values the engine emits, so the
+                // real output can be observed from logs (independent of VRChat/avatar).
+                if _last_log.elapsed().as_secs_f32() >= 1.0 {
+                    _last_log = std::time::Instant::now();
+                    let g = |key: &str| output.params.iter().find(|(k, _)| k == key).map(|(_, v)| *v);
+                    let face_seen = g("SYS_HEAD_ROT_W").is_some();
+                    println!(
+                        "[OSC OUT] params={} | Jaw={:.2} BlinkL={:.2} BlinkR={:.2} EyesX={:+.2} EyesY={:+.2} | HeadYaw={:+.2} HeadPitch={:+.2} HeadRoll={:+.2}",
+                        output.params.len(),
+                        g("JawOpen").unwrap_or(-1.0),
+                        g("EyeBlinkLeft").unwrap_or(-1.0),
+                        g("EyeBlinkRight").unwrap_or(-1.0),
+                        g("EyesX").unwrap_or(-9.0),
+                        g("EyesY").unwrap_or(-9.0),
+                        g("HeadYaw").unwrap_or(-9.0),
+                        g("HeadPitch").unwrap_or(-9.0),
+                        g("HeadRoll").unwrap_or(-9.0),
+                    );
+                    // [HMD OUT] What we actually stream to the virtual headset, so
+                    // we can tell whether head rotation is even moving and why.
+                    println!(
+                        "[HMD OUT] face_webcam={} | mouse(captured={}) yaw={:+.2} pitch={:+.2} | head_quat=[{:+.2} {:+.2} {:+.2} {:+.2}]",
+                        if face_seen { "YES" } else { "no" },
+                        mouse_look.is_capturing(),
+                        mouse_yaw,
+                        mouse_pitch,
+                        head_quat[0], head_quat[1], head_quat[2], head_quat[3],
+                    );
+                }
 
                 // 3. Send to VRChat (profiled)
                 let has_data = !output.params.is_empty() || !output.trackers.is_empty();
@@ -493,7 +694,14 @@ impl TrackingEngine {
 
 
     pub fn stop(&self) {
-        *self.running.lock().unwrap() = false;
+        // Poison-tolerant: if a worker thread panicked while holding this lock,
+        // Stop must STILL succeed, otherwise the app gets stuck "running" forever
+        // (this was a real symptom: after a bad camera switch, Stop did nothing).
+        match self.running.lock() {
+            Ok(mut r) => *r = false,
+            Err(poisoned) => *poisoned.into_inner() = false,
+        }
         self.web_interface.blocking_lock().stop(); // [FIX] Blocking lock
+        println!("[Rust] Stop requested (running = false).");
     }
 }

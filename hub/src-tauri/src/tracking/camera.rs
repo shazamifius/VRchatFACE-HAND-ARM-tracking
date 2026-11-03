@@ -149,6 +149,53 @@ impl CameraManager {
         }
 
         // ------------------------------------------------------------------
+        // Attempt 0 (PROVEN FAST PATH): let the driver pick its NATIVE default.
+        //
+        // On many MediaFoundation webcams, requesting a specific low-res NV12 format
+        // negotiates a broken stream AND reports a bogus `frame_rate()` of 1, while
+        // the driver's own default streams fine at ~30fps. The benchmark uses exactly
+        // this request (`None`) and measured 27 FPS, so try it FIRST — and MEASURE the
+        // real throughput instead of trusting the (often wrong) reported frame_rate.
+        // ------------------------------------------------------------------
+        {
+            #[cfg(target_os = "windows")]
+            let backend = ApiBackend::MediaFoundation;
+            #[cfg(not(target_os = "windows"))]
+            let backend = ApiBackend::Auto;
+
+            let req = RequestedFormat::new::<RgbFormat>(RequestedFormatType::None);
+            match Camera::with_backend(index.clone(), req, backend) {
+                Ok(mut cam) => {
+                    if cam.open_stream().is_ok() {
+                        // Measure ACTUAL delivered frames over ~700ms.
+                        let mut got = 0u32;
+                        let t0 = std::time::Instant::now();
+                        while t0.elapsed().as_millis() < 700 {
+                            if cam.frame().is_ok() { got += 1; }
+                            if got >= 8 { break; }
+                        }
+                        let measured_fps = got as f32 / t0.elapsed().as_secs_f32().max(0.001);
+                        let f = cam.camera_format();
+                        if got >= 5 {
+                            println!("[Rust] Attempt 0 (native default) OK: {}x{} {:?} — measured ~{:.0} fps (reported {})",
+                                f.resolution().width(), f.resolution().height(), f.format(),
+                                measured_fps, f.frame_rate());
+                            self.camera = Some(cam);
+                            self.current_config = Some(config);
+                            return Ok(());
+                        } else {
+                            println!("[Rust] Attempt 0 native default too slow ({} frames in 700ms). Falling back to heuristics...", got);
+                            let _ = cam.stop_stream();
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("[Rust] Attempt 0 (native default) could not open: {}. Falling back to heuristics...", e);
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
         // FALLBACK / AUTO LOGIC (Original Heuristics)
         // ------------------------------------------------------------------
         println!("[Rust] Using Heuristic Camera Selection (MJPEG Priority)...");

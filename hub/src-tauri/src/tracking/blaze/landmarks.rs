@@ -18,21 +18,35 @@ impl BlazeLandmark {
             .with_intra_threads(4)?
             .commit_from_file(model_path)?;
 
+        // Determine layout AND input size from the model's ACTUAL input shape, not
+        // the node name and not the caller's guess. Channel axis is the size-3 one:
+        //   [N, 3, H, W] => NCHW   |   [N, H, W, 3] => NHWC
+        // Auto-detecting the size lets us swap models of different resolutions
+        // (e.g. the 192x192 468-pt FaceMesh) without touching the call sites.
         let mut is_nchw = true;
+        let mut in_w = input_size;
+        let mut in_h = input_size;
         if let Some(input) = session.inputs().get(0) {
-            let name = input.name();
-            println!("[Rust] Landmark input name: {}", name);
-            if name.contains("_1") || name.contains(".1") || name.to_lowercase().contains("nhwc") {
-                is_nchw = false;
-                println!("[Rust] Model '{}' detected as NHWC.", name);
+            let name = input.name().to_string();
+            if let ort::value::ValueType::Tensor { shape, .. } = input.dtype() {
+                if shape.len() == 4 && shape[1] == 3 {
+                    is_nchw = true;
+                    if shape[2] > 0 { in_h = shape[2] as usize; }
+                    if shape[3] > 0 { in_w = shape[3] as usize; }
+                } else if shape.len() == 4 && shape[3] == 3 {
+                    is_nchw = false;
+                    if shape[1] > 0 { in_h = shape[1] as usize; }
+                    if shape[2] > 0 { in_w = shape[2] as usize; }
+                }
+                println!("[Rust] Landmark '{}' input shape {:?} -> {} {}x{}", name, &shape[..], if is_nchw { "NCHW" } else { "NHWC" }, in_w, in_h);
             } else {
-                println!("[Rust] Model '{}' detected as NCHW.", name);
+                println!("[Rust] Landmark '{}' input is not a tensor; assuming NCHW", name);
             }
         }
 
         Ok(Self {
             session,
-            input_size: (input_size, input_size),
+            input_size: (in_w, in_h),
             num_dims,
             is_nchw,
         })
@@ -50,6 +64,13 @@ impl BlazeLandmark {
         
         // 1. Extract ROI
         let roi_img = extract_roi(image, xc, yc, theta, scale, (self.input_size.0 as u32, self.input_size.1 as u32));
+
+        // 1b. Per-region adaptive lighting normalization. Because this crop is a
+        // tight box around one body part, CLAHE here acts independently per
+        // region (face / each hand) and makes the model robust to bad/uneven
+        // room lighting WITHOUT touching the camera source — the user's key
+        // insight. Cheap on a ~128–192px crop (sub-ms). See enhance::clahe.
+        let roi_img = crate::tracking::blaze::enhance::clahe(&roi_img, 8, 2.5);
 
         // 2. Preprocess
         // Normalize 0..1 or -1..1?
@@ -102,9 +123,9 @@ impl BlazeLandmark {
         let (_shape_score, score_slice) = outputs[1].try_extract_tensor::<f32>()?; // flag
         let score_val = score_slice[0];
 
-        if true {
-             println!("[AI] Landmark Output Shape: {:?} | Slice Len: {}", shape_lm, landmarks_slice.len());
-        }
+        // (Per-call landmark shape logging removed; see the 1 Hz status summary
+        // in the tracking loop for health info.)
+        let _ = &shape_lm;
 
         let mut handedness_val = None;
         if outputs.len() >= 3 {

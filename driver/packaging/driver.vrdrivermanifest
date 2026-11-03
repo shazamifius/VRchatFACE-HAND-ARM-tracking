@@ -1,0 +1,7 @@
+{
+   "alwaysActivate": true,
+   "name": "vrcbridge",
+   "directory": "",
+   "resourceOnly": false,
+   "activatesOnEvent": false
+}

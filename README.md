@@ -5,9 +5,24 @@
 [![Rust](https://img.shields.io/badge/Built_with-Rust_1.80+-orange?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/UI_Frame-Tauri_v2-blue?style=for-the-badge&logo=tauri)](https://tauri.app/)
 [![VRChat](https://img.shields.io/badge/Works_with-VRChat_OSC-MediumPurple?style=for-the-badge)](https://vrchat.com)
-[![Status](https://img.shields.io/badge/Status-Stable-success?style=for-the-badge)](#)
+[![Status](https://img.shields.io/badge/Status-Paused-lightgrey?style=for-the-badge)](#-project-status-paused)
 
 **Transform your Phone into a High-End Face Tracker. Zero Install. Instant Connect.**
+
+> [!IMPORTANT]
+> ## ⏸️ Project status: paused
+>
+> This project is **no longer actively developed** and receives no updates (no dependency bumps, no new features).
+> Development will **resume later as part of the web3 project**.
+>
+> The code is kept as-is for reading and reference. The tracking pipeline is **not production-ready**:
+> foundations are solid (detection, IK, filtering, SteamVR driver), but tracking reliability is still a work in progress —
+> see [`VISION-et-ETAT.md`](VISION-et-ETAT.md) for an honest state of the project.
+>
+> **Branches:** `main` is the only reference branch. `V1-project-tracking`, `V1.2-project-tracking`, `V2-project-tracking`
+> (early C++ prototypes) and `claude/tracking-fixes-2026-06-10` (already merged into `main`) are **read-only archives**.
+>
+> 🇫🇷 *Projet en pause : plus de mises à jour. Il reprendra plus tard dans le cadre du projet web3. Le code reste consultable, mais n'est pas destiné à être utilisé en l'état.*
 
 ---
 
