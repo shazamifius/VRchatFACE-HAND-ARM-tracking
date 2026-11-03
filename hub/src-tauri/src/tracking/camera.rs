@@ -39,6 +39,9 @@ impl CameraManager {
         #[cfg(target_os = "windows")]
         let backends_to_try = vec![ApiBackend::MediaFoundation, ApiBackend::Auto];
         // Note: DirectShow might be needed for some ASUS cams.
+        // Elsewhere, let nokhwa pick the native backend (V4L2 on Linux, AVFoundation on macOS).
+        #[cfg(not(target_os = "windows"))]
+        let backends_to_try = vec![ApiBackend::Auto];
 
         for backend in backends_to_try {
             if let Ok(cams) = nokhwa::query(backend) {
